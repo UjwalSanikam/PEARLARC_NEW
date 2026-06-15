@@ -1,0 +1,23 @@
+# --- Sensitive Data ---
+.env
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+backend/venv/
+backend/.venv/
+env/
+venv/
+
+# --- Node/React ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# --- OS/Editor Specific ---
+.DS_Store
+.vscode/
+.idea/
+Thumbs.db

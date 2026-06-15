@@ -1,0 +1,13 @@
+Cybersecurity & Fraud Prevention FAQs
+
+Q: What should I do if I clicked a suspicious link in a text message?
+A: Disconnect your device from the internet immediately (turn on Airplane mode). Do not enter any personal information on the opened page. Run a full antivirus scan on your device. If you entered banking details, call your bank's fraud department immediately to block your cards and monitor your accounts.
+
+Q: How can I tell if an email is a phishing scam?
+A: Check the sender's actual email address, not just the display name. Look for spelling errors, urgent or threatening language (e.g., "Your account will be suspended in 24 hours"), and generic greetings. Hover over links without clicking to see the actual destination URL. Official organizations rarely ask for passwords or sensitive data via email.
+
+Q: What is a strong password policy?
+A: A strong password is at least 12-16 characters long. It should include a mix of uppercase letters, lowercase letters, numbers, and symbols. Never use personal information like birthdays or pet names. Do not reuse passwords across different accounts. Use a reputable password manager to generate and store complex passwords securely.
+
+Q: What is multi-factor authentication (MFA)?
+A: MFA adds an extra layer of security by requiring two or more verification methods to access an account. This usually involves something you know (a password) and something you have (a code sent to your phone or an authenticator app). Always enable MFA on critical accounts like email, banking, and social media.

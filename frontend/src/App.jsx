@@ -27,22 +27,42 @@ function App() {
   }, []);
 
   // 4. Function to handle sending a message
-  const handleSendMessage = (e) => {
+  const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!inputValue.trim()) return;
 
-    // Add the user's message to the chat
-    const newMessages = [...messages, { sender: 'user', text: inputValue }];
-    setMessages(newMessages);
-    setInputValue('');
+    const userText = inputValue;
 
-    // Simulate a temporary "mock" AI response (Until Phase 2 is built)
-    setTimeout(() => {
+    // Add the user's message to the chat UI
+    setMessages(prev => [...prev, { sender: 'user', text: userText }]);
+    setInputValue(''); // Clear the input box
+
+    try {
+      // Send the question to your actual Python AI backend
+      const response = await fetch('http://localhost:8000/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message: userText })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      // Add the AI's actual response to the chat
+      setMessages(prev => [...prev, { sender: 'ai', text: data.reply }]);
+
+    } catch (error) {
+      console.error("Chat error:", error);
       setMessages(prev => [...prev, {
         sender: 'ai',
-        text: 'I am a placeholder response! In Phase 2, my brain will be connected to the FastAPI backend to answer this.'
+        text: 'Sorry, I am having trouble connecting to my AI brain right now.'
       }]);
-    }, 1000);
+    }
   };
 
   return (
