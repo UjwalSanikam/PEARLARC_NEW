@@ -16,6 +16,9 @@ dist/
 dist-ssr/
 *.local
 
+# --- Vector Database Indexes (NEW FIX) ---
+**/faiss_index/
+
 # --- OS/Editor Specific ---
 .DS_Store
 .vscode/
