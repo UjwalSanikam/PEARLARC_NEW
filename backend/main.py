@@ -5,9 +5,8 @@ import os
 from dotenv import load_dotenv
 
 # LangChain and AI Imports
-from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_classic.chains import RetrievalQA
 
 # 1. Load the API keys from your .env file
@@ -26,12 +25,13 @@ app.add_middleware(
 
 print("Booting up the AI brain...")
 
-# 3. Load the FAISS Database we just created
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-# allow_dangerous_deserialization is required for FAISS local loading in newer updates
+# 3. Match the embedding model name to gemini-embedding-001
+embeddings = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
+
+# Load the FAISS Database using our optimized cloud embedding architecture
 db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
 
-# 4. Set up the OpenAI LLM and the RAG Chain
+# 4. Set up the Google Gemini LLM and the RAG Chain
 # We use temperature=0 so the AI gives factual, non-creative answers
 llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0)
 qa_chain = RetrievalQA.from_chain_type(
