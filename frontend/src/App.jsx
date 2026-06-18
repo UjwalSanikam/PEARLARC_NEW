@@ -8,7 +8,7 @@ const INITIAL_MESSAGES = [
   {
     role: 'ai',
     text: 'Hello! I am your Cybersecurity AI Assistant. How can I help you stay safe online today?',
-    action: 'allow',
+    action: 'greeting',
   },
 ];
 
@@ -253,7 +253,7 @@ export default function App() {
                 PII: {lastAiMessage?.pii?.length > 0 ? 'DETECTED' : 'NONE DETECTED'}
               </span>
             </div>
-            <div className="disclaimer">AEGIS AI can make mistakes. Verify critical security configurations.</div>
+            <div className="disclaimer">CYBERSECURITY AI can make mistakes. Verify critical security configurations.</div>
           </div>
         </main>
 

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 
-# --- NEW: Local LangChain and Ollama Imports ---
+# --- RESTORED: Local LangChain and Ollama Imports ---
 from langchain_community.vectorstores import FAISS
 from langchain_ollama import ChatOllama
 from langchain_ollama import OllamaEmbeddings
@@ -14,7 +14,6 @@ from security_guardrails import run_guardrails, GuardrailAction
 
 app = FastAPI(title="CyberGuard AI - Offline Edition")
 
-# CORS Middleware (Allows your React frontend to connect)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], 
@@ -31,7 +30,7 @@ embeddings = OllamaEmbeddings(model="nomic-embed-text")
 # Load the FAISS Database using the local embedding architecture
 db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
 
-# 2. Set up the Local Ollama LLM (Phi-3) and the RAG Chain
+# 2. RESTORED: Local Llama 3.2 (1B) setup with k=6 for maximum speed/context
 llm = ChatOllama(model="llama3.2:1b", temperature=0)
 qa_chain = RetrievalQA.from_chain_type(
     llm=llm, 
@@ -60,10 +59,8 @@ async def chat_with_ai(req: ChatRequest):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
-    # --- Phase 3: Run Guardrails First (The Interceptor Layer) ---
     result = run_guardrails(req.message)
 
-    # Intercept EMERGENCY and BLOCK_OOB (Never reaches the RAG AI)
     if result.action in (GuardrailAction.EMERGENCY, GuardrailAction.BLOCK_OOB):
         return ChatResponse(
             reply=result.response,
@@ -72,11 +69,8 @@ async def chat_with_ai(req: ChatRequest):
             domain_scores=result.classifier_score,
         )
 
-    # --- Phase 2: RAG Pipeline (Runs only if the message passes security checks) ---
     try:
-        # We pass the safe, redacted message to the RAG chain
         rag_result = qa_chain.invoke(result.safe_message)
-        
         return ChatResponse(
             reply=rag_result["result"],
             action=result.action.value,
