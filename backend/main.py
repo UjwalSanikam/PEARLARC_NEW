@@ -2,23 +2,19 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
-from dotenv import load_dotenv
 
-# LangChain and AI Imports
+# --- NEW: Local LangChain and Ollama Imports ---
 from langchain_community.vectorstores import FAISS
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_ollama import ChatOllama
+from langchain_ollama import OllamaEmbeddings
 from langchain_classic.chains import RetrievalQA
 
 # --- Phase 3 Integration: Import the security guardrails layer ---
 from security_guardrails import run_guardrails, GuardrailAction
 
-# 1. Load the API keys from your .env file
-load_dotenv()
-print("Did I find the API key?", os.getenv("GOOGLE_API_KEY") is not None)
+app = FastAPI(title="CyberGuard AI - Offline Edition")
 
-app = FastAPI(title="CyberGuard AI")
-
-# 2. CORS Middleware (Allows your React frontend to connect)
+# CORS Middleware (Allows your React frontend to connect)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], 
@@ -27,23 +23,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-print("Booting up the AI brain...")
+print("Booting up the Offline AI brain...")
 
-# 3. Match the embedding model name to gemini-embedding-001 globally
-embeddings = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
+# 1. Use the Local Nomic Embedding Model
+embeddings = OllamaEmbeddings(model="nomic-embed-text")
 
-# Load the FAISS Database using our optimized cloud embedding architecture
+# Load the FAISS Database using the local embedding architecture
 db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
 
-# 4. Set up the Google Gemini LLM and the RAG Chain globally (Once on bootup)
-llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0)
+# 2. Set up the Local Ollama LLM (Phi-3) and the RAG Chain
+llm = ChatOllama(model="llama3.2:1b", temperature=0)
 qa_chain = RetrievalQA.from_chain_type(
     llm=llm, 
     chain_type="stuff", 
-    retriever=db.as_retriever(search_kwargs={"k": 2})
+    retriever=db.as_retriever(search_kwargs={"k": 6})
 )
 
-# 5. Define incoming and outgoing data structures
+# 3. Define incoming and outgoing data structures
 class ChatRequest(BaseModel):
     message: str
 
@@ -57,7 +53,7 @@ class ChatResponse(BaseModel):
 
 @app.get("/api/status")
 def status():
-    return {"message": "The Cybersecurity AI backend is locked, loaded, and listening!"}
+    return {"message": "The Offline Cybersecurity AI backend is locked, loaded, and listening!"}
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_with_ai(req: ChatRequest):

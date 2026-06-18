@@ -1,15 +1,21 @@
 """
-Phase 3: Security Guardrails — The Armor
-=========================================
+Phase 3: Security Guardrails — The Armor (Upgraded with Semantic Classification)
+===================================================================================
 Three-layer interceptor middleware for the CyberGuard AI FastAPI backend.
 Runs BEFORE the RAG pipeline on every /api/chat request.
 
 Layer 1 — Emergency Fraud Detector  (highest priority, bypasses RAG)
 Layer 2 — PII Scanner & Redactor    (scrubs sensitive data in-place)
-Layer 3 — Domain Classifier         (blocks out-of-scope queries)
+Layer 3 — Semantic Domain Classifier (understands intent via embeddings, not keywords)
 
-Author: Phase 3 Assignment (Reviewed & Fixed)
-Tech:   Python 3.11, FastAPI, Pydantic, regex
+New in Phase 3 Upgrade:
+- Semantic embeddings for domain classification (replaces hardcoded keyword lists)
+- Cosine similarity scoring for nuanced intent detection
+- Confidence-based thresholds for better UX
+- Cached embeddings for performance
+
+Author: Phase 3 Assignment (Upgraded with Semantic Intelligence)
+Tech:   Python 3.11, FastAPI, Pydantic, regex, LangChain Embeddings, scipy.spatial
 """
 
 import re
@@ -18,6 +24,9 @@ import logging
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Optional
+import numpy as np
+from scipy.spatial.distance import cosine
+from langchain_ollama import OllamaEmbeddings
 
 logger = logging.getLogger("aegis.guardrails")
 
@@ -116,51 +125,166 @@ def detect_and_redact_pii(message: str) -> tuple[str, list[str]]:
     return redacted, found
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LAYER 3 — DOMAIN CLASSIFIER
+# LAYER 3 — SEMANTIC DOMAIN CLASSIFIER (Upgraded)
 # ─────────────────────────────────────────────────────────────────────────────
 
-CYBER_TIER1 = {
-    "phishing", "ransomware", "malware", "spyware", "keylogger", "trojan",
-    "ddos", "sql injection", "xss", "csrf", "zero-day", "exploit",
-    "vulnerability", "penetration test", "pentest", "siem", "firewall",
-    "intrusion detection", "ids", "ips", "soc", "cert", "cve",
-    "data breach", "credential stuffing", "man in the middle", "mitm",
-    "social engineering", "vishing", "smishing", "deepfake",
-    "upi fraud", "otp scam", "sim swap", "identity theft", "cyber crime",
-}
+class SemanticDomainClassifier:
+    """
+    Semantic classifier that understands intent via embeddings instead of keyword matching.
+    Uses cosine similarity to determine if a query is cybersecurity-related or out-of-bounds.
+    """
+    
+    def __init__(self, embedding_model_name: str = "nomic-embed-text"):
+        """Initialize the semantic classifier with Ollama embeddings."""
+        self.embeddings = OllamaEmbeddings(model=embedding_model_name)
+        self._embedding_cache = {}
+        self._domain_anchors_cache = None
+        logger.info("Semantic Domain Classifier initialized with model: %s", embedding_model_name)
+    
+    def _get_embedding(self, text: str) -> np.ndarray:
+        """Get embedding for text with caching."""
+        if text in self._embedding_cache:
+            return self._embedding_cache[text]
+        
+        embedding = np.array(self.embeddings.embed_query(text))
+        self._embedding_cache[text] = embedding
+        return embedding
+    
+    def _get_domain_anchors(self) -> dict:
+        """
+        Semantic anchors for each domain.
+        These represent the 'center' of each domain's semantic space.
+        Updated: Uses representative phrases instead of keywords.
+        
+        Note: Semantic classifier only determines IN-SCOPE (cybersecurity) vs OUT-OF-SCOPE (OOB).
+        Emergency detection is handled by Layer 1 regex patterns (see check_emergency).
+        """
+        if self._domain_anchors_cache is not None:
+            return self._domain_anchors_cache
+        
+        # Core cybersecurity domain anchors (representative phrases)
+        # Includes both preventive questions AND incident response (past/current)
+        cyber_anchors = [
+            "how do I protect my account from hackers",
+            "what is malware and how does ransomware attack my computer",
+            "how to detect and prevent phishing scams",
+            "what are security best practices for passwords and authentication",
+            "how do I secure my banking transactions and UPI payments",
+            "what should I do if my identity is stolen or credentials leaked",
+            "how to respond to active fraud or cyber attacks",
+            "what are firewalls, VPNs, and encryption in cybersecurity",
+            "how to recognize social engineering and vishing scams",
+            "cybersecurity incident response and data breach management",
+        ]
+        
+        # Out-of-bounds domain anchors (representative phrases)
+        oob_anchors = [
+            "how to cook a recipe or bake a cake",
+            "what are the best movies and TV shows to watch",
+            "tips for fitness training and weight loss diet",
+            "where to travel for vacation and what hotels to book",
+            "what is the capital of France and geography facts",
+            "fashion and skincare tips for beauty",
+            "sports scores and cricket match updates",
+            "music lyrics and concert information",
+            "medical advice for health conditions and symptoms",
+            "restaurant recommendations and food cuisine reviews",
+        ]
+        
+        # Embed all anchors and compute their mean (center of each domain)
+        cyber_embeddings = [self._get_embedding(text) for text in cyber_anchors]
+        oob_embeddings = [self._get_embedding(text) for text in oob_anchors]
+        
+        self._domain_anchors_cache = {
+            "cybersecurity": np.mean(cyber_embeddings, axis=0),
+            "out_of_bounds": np.mean(oob_embeddings, axis=0),
+        }
+        
+        logger.info("Domain semantic anchors computed and cached")
+        return self._domain_anchors_cache
+    
+    def classify(self, message: str) -> dict:
+        """
+        Classify a message as cybersecurity (in-scope) or out-of-bounds.
+        
+        Returns: {
+            'is_allowed': bool,
+            'primary_domain': str,
+            'cyber_similarity': float,
+            'oob_similarity': float,
+            'confidence': float,
+        }
+        
+        Note: Emergency detection is handled by Layer 1 regex patterns.
+        This classifier only determines if a query is in-scope (cybersecurity).
+        """
+        try:
+            # Get message embedding
+            message_embedding = self._get_embedding(message)
+            
+            # Get domain anchors
+            anchors = self._get_domain_anchors()
+            
+            # Compute cosine similarity (1 - cosine_distance)
+            # Note: cosine() returns distance, so we subtract from 1 for similarity
+            cyber_sim = 1 - cosine(message_embedding, anchors["cybersecurity"])
+            oob_sim = 1 - cosine(message_embedding, anchors["out_of_bounds"])
+            
+            # Classify based on similarities
+            # Use a tie-breaker: cyber must be meaningfully higher than OOB to block
+            if cyber_sim > oob_sim:
+                # Cybersecurity domain (in-scope)
+                is_allowed = True
+                primary_domain = "cybersecurity"
+                confidence = cyber_sim
+            elif oob_sim > 0.55:
+                # Out-of-bounds domain - only block if OOB similarity is significant
+                # AND higher than cyber
+                is_allowed = False
+                primary_domain = "out_of_bounds"
+                confidence = oob_sim
+            else:
+                # Ambiguous: allow (let RAG handle gracefully)
+                is_allowed = True
+                primary_domain = "ambiguous"
+                confidence = max(cyber_sim, oob_sim)
+            
+            result = {
+                "is_allowed": is_allowed,
+                "primary_domain": primary_domain,
+                "cyber_similarity": float(cyber_sim),
+                "oob_similarity": float(oob_sim),
+                "confidence": float(confidence),
+            }
+            
+            logger.debug(
+                "Semantic classification: domain=%s, cyber=%.3f, oob=%.3f",
+                primary_domain, cyber_sim, oob_sim
+            )
+            
+            return result
+        
+        except Exception as e:
+            logger.error("Error in semantic classification: %s", str(e))
+            # Fail open: allow message to proceed on error
+            return {
+                "is_allowed": True,
+                "primary_domain": "error",
+                "cyber_similarity": 0.0,
+                "oob_similarity": 0.0,
+                "confidence": 0.0,
+                "error": str(e),
+            }
 
-CYBER_TIER2 = {
-    "cybersecurity", "cyber security", "security", "hack", "hacker", "hacked",
-    "password", "encryption", "vpn", "2fa", "mfa", "authentication",
-    "authorization", "ssl", "tls", "certificate", "patch", "update",
-    "antivirus", "endpoint", "network", "cloud", "safe", "secure", "router", "wifi",
-    "fraud", "scam", "phish", "threat", "attack", "virus", "worm", "internet",
-    "backdoor", "rootkit", "botnet", "darkweb", "dark web", "website", "link",
-    "bank", "upi", "otp", "pin", "account", "card", "transaction",
-    "suspicious", "unauthorized", "blocked", "stolen", "leaked",
-    "incident", "response", "forensics", "audit", "compliance", "gdpr",
-}
+# Initialize the global semantic classifier (lazy-loaded on first use)
+_semantic_classifier: Optional[SemanticDomainClassifier] = None
 
-OOB_KEYWORDS = {
-    # Food, cooking, and snacks (FIXED)
-    "recipe", "cook", "bake", "ingredient", "restaurant", "food", "cuisine",
-    "pasta", "pizza", "burger", "salad", "dessert", "breakfast", "lunch", "dinner",
-    "chocolate", "candy", "cake", "sweet", "drink", "water", "coffee", "tea", "fruit",
-    # Health & Medical (NEW FIX)
-    "health", "healthy", "medicine", "doctor", "hospital", "disease", "cancer", "symptom", 
-    "pain", "surgery", "treatment", "calories", "nutrition",
-    # Entertainment
-    "movie", "film", "series", "tv show", "netflix", "celebrity", "actor",
-    "music", "song", "lyrics", "album", "concert", "dance",
-    # Sports
-    "cricket", "football", "soccer", "basketball", "tennis", "ipl", "fifa",
-    "match", "score", "player", "team", "tournament", "league",
-    # Travel & lifestyle
-    "hotel", "flight", "travel", "vacation", "weather", "fashion", "shopping",
-    "skincare", "makeup", "fitness", "diet", "workout", "gym",
-    # General knowledge
-    "history", "geography", "capital of", "language", "population",
-}
+def get_semantic_classifier() -> SemanticDomainClassifier:
+    """Get or create the global semantic classifier instance."""
+    global _semantic_classifier
+    if _semantic_classifier is None:
+        _semantic_classifier = SemanticDomainClassifier()
+    return _semantic_classifier
 
 DOMAIN_REJECTION_RESPONSE = """\
 I'm a specialized **cybersecurity and fraud prevention** assistant.
@@ -169,39 +293,22 @@ Your question appears to be outside my area of expertise.
 Please ask a security or fraud-related question and I'll be glad to help.
 """
 
-def compute_domain_scores(message: str) -> dict:
-    """
-    FIXED: Now uses regex word boundaries (\b) to ensure partial words don't trigger false positives.
-    """
-    text = message.lower()
-    
-    # Calculate scores by looking for whole words only
-    cyber = sum(2 for kw in CYBER_TIER1 if re.search(r'\b' + re.escape(kw) + r'\b', text))
-    cyber += sum(1 for kw in CYBER_TIER2 if re.search(r'\b' + re.escape(kw) + r'\b', text))
-    oob = sum(1 for kw in OOB_KEYWORDS if re.search(r'\b' + re.escape(kw) + r'\b', text))
-    
-    return {"cyber_score": cyber, "oob_score": oob}
-
-def classify_domain(message: str) -> tuple[bool, dict]:
-    scores = compute_domain_scores(message)
-    
-    # If it has strong cyber signals, allow it
-    if scores["cyber_score"] > 0:
-        return True, scores
-    # If it has no cyber signals but hits out-of-bounds keywords, block it
-    if scores["oob_score"] > 0:
-        return False, scores
-        
-    # Ambiguous: short greetings, unclear intent → allow; let RAG handle gracefully
-    return True, scores
-
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN INTERCEPTOR
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_guardrails(raw_message: str) -> GuardrailResult:
+    """
+    Run the complete 3-layer security guardrails pipeline.
+    
+    Order of execution:
+    1. Emergency Detector (regex patterns) — highest priority
+    2. PII Redactor (regex patterns) — all messages get checked
+    3. Semantic Domain Classifier (embeddings) — determines if message is in-scope
+    """
     logger.debug("Guardrails processing: %.80s...", raw_message)
 
+    # LAYER 1: Emergency check (regex patterns - fast, specific)
     if check_emergency(raw_message):
         safe_msg, pii_found = detect_and_redact_pii(raw_message)
         logger.warning("EMERGENCY action triggered. PII redacted: %s", pii_found)
@@ -212,33 +319,63 @@ def run_guardrails(raw_message: str) -> GuardrailResult:
             pii_found=pii_found,
         )
 
+    # LAYER 2: PII redaction (regex patterns - deterministic)
     safe_msg, pii_found = detect_and_redact_pii(raw_message)
-    is_allowed, scores = classify_domain(safe_msg)
 
-    if not is_allowed:
-        logger.info("Domain BLOCKED. Scores: %s", scores)
+    # LAYER 3: Semantic domain classification (embeddings - intelligent)
+    classifier = get_semantic_classifier()
+    classification = classifier.classify(safe_msg)
+    
+    logger.info(
+        "Domain classification: %s (cyber=%.2f, oob=%.2f, conf=%.2f)",
+        classification["primary_domain"],
+        classification["cyber_similarity"],
+        classification["oob_similarity"],
+        classification["confidence"],
+    )
+
+    # Block out-of-bounds queries
+    if not classification["is_allowed"]:
+        logger.info("Domain BLOCKED by semantic classifier: %s", classification["primary_domain"])
         return GuardrailResult(
             action=GuardrailAction.BLOCK_OOB,
             safe_message=safe_msg,
             response=DOMAIN_REJECTION_RESPONSE,
-            classifier_score=scores,
+            classifier_score=classification,
         )
 
+    # Determine final action for allowed messages
     action = GuardrailAction.PII_REDACTED if pii_found else GuardrailAction.ALLOW
-    logger.info("Guardrails PASSED. Action=%s, PII=%s, Scores=%s", action, pii_found, scores)
+    logger.info("Guardrails PASSED. Action=%s, PII=%s, Classification=%s", 
+                action, pii_found, classification["primary_domain"])
+    
     return GuardrailResult(
         action=action,
         safe_message=safe_msg,
         pii_found=pii_found,
-        classifier_score=scores,
+        classifier_score=classification,
     )
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
     test_cases = [
-        ("BLOCK - The original unblocked query", "is chocolate healthy?"),
-        ("ALLOW - Valid cyber question", "How do I secure my router?"),
+        ("BLOCK - Out of scope (food)", "what are some healthy recipes?"),
+        ("BLOCK - Out of scope (sports)", "what's the cricket IPL score today?"),
+        ("ALLOW - Valid cyber question", "How do I secure my router from hackers?"),
+        ("ALLOW - Semantic cyber question", "Someone compromised my banking app, what should I do?"),
+        ("EMERGENCY - Active threat (regex)", "My UPI account is being drained right now by someone!"),
     ]
+    
+    print("\n" + "="*70)
+    print("SEMANTIC DOMAIN CLASSIFIER - QUICK TEST")
+    print("="*70 + "\n")
+    
     for desc, msg in test_cases:
         r = run_guardrails(msg)
-        print(f"{desc}: {r.action.value.upper()}")
+        print(f"[{desc}]")
+        print(f"  Message: {msg}")
+        print(f"  Action: {r.action.value.upper()}")
+        if r.classifier_score:
+            print(f"  Domain: {r.classifier_score.get('primary_domain', 'N/A')}")
+        print()

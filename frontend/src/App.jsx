@@ -145,7 +145,7 @@ export default function App() {
         <div className="brand">
           <Shield size={20} className="brand-icon" />
           <div className="brand-text">
-            <span className="brand-name">AEGIS</span>
+            <span className="brand-name">Cybersecurity</span>
             <span className="brand-sub">CyberGuard AI</span>
           </div>
         </div>
