@@ -1,19 +1,4 @@
-"""
-Phase 3: Security Guardrails — Semantic Edition
-=================================================
-Domain Classifier upgraded from lexical keyword matching to
-Semantic Embeddings + Cosine Similarity using sentence-transformers.
-
-Architecture:
-  - At startup: embed anchor sentences per domain → compute centroid vector
-  - At runtime: embed user message → cosine similarity vs each centroid
-  - Winner = domain with highest similarity score
-
-Layer 1 — Emergency Fraud Detector  (regex, highest priority, bypasses RAG)
-Layer 2 — PII Scanner & Redactor    (regex, scrubs sensitive data in-place)
-Layer 3 — Semantic Domain Classifier (embeddings + cosine similarity)
-"""
-
+# backend/security_guardrails.py
 import re
 import logging
 import numpy as np
@@ -24,10 +9,6 @@ from scipy.spatial.distance import cosine
 from langchain_ollama import OllamaEmbeddings
 
 logger = logging.getLogger("aegis.guardrails")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SHARED TYPES
-# ─────────────────────────────────────────────────────────────────────────────
 
 class GuardrailAction(str, Enum):
     ALLOW        = "allow"
@@ -43,225 +24,181 @@ class GuardrailResult:
     pii_found:        list[str] = field(default_factory=list)
     classifier_score: dict = field(default_factory=dict)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURATION & PATTERNS
-# ─────────────────────────────────────────────────────────────────────────────
-
-EMERGENCY_RESPONSE = (
-    "🚨 **EMERGENCY DETECTED** 🚨\n"
-    "It appears you are facing an active cyberattack or financial fraud.\n\n"
-    "**IMMEDIATE ACTIONS:**\n"
-    "1. **Call 1930** immediately (National Cyber Crime Helpline).\n"
-    "2. Block your bank accounts/cards by calling your bank's toll-free number.\n"
-    "3. Report the incident at **cybercrime.gov.in**.\n"
-    "4. Disconnect your device from the internet if you suspect malware."
-)
-
-DOMAIN_REJECTION_RESPONSE = (
-    "I am a specialized Cybersecurity AI Assistant. I can only answer questions "
-    "related to online safety, fraud prevention, and information security. "
-    "Please ask a cybersecurity-related question!"
-)
+EMERGENCY_RESPONSE = "🚨 **EMERGENCY DETECTED** 🚨\n1. Call 1930 immediately.\n2. Block your bank accounts."
+DOMAIN_REJECTION_RESPONSE = "I am a specialized Cybersecurity AI Assistant. Please ask a cybersecurity-related question!"
 
 PII_PATTERNS = {
     "AADHAAR": r"\b\d{4}\s?\d{4}\s?\d{4}\b",
     "PAN": r"\b[A-Z]{5}[0-9]{4}[A-Z]{1}\b",
-    "EMAIL": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
-    "PHONE": r"\b(?:\+91|91|0)?\s?[6-9]\d{9}\b",
-    "CREDIT_CARD": r"\b(?:\d[ -]*?){13,16}\b"
+    "EMAIL": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"
 }
 
 EMERGENCY_PATTERNS = [
     r"\b(stolen|lost)\s*(money|funds|wallet)\b",
-    r"\b(bank|account|upi)\s*(hacked|compromised|drained)\b",
-    r"\b(someone|they|hacker)\s*(is|are)\s*(stealing|draining|transferring)\b",
-    r"\b(ransomware|locked)\s*(computer|files|screen)\b",
-    r"\b(being|getting)\s*(hacked|scammed|defrauded)\b",
+    r"\b(bank|account|upi)\s*(hacked|compromised|drained)\b"
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SEMANTIC CLASSIFIER
-# ─────────────────────────────────────────────────────────────────────────────
-
 class SemanticDomainClassifier:
-    """Classifies user intent mathematically using vector embeddings."""
-    
     def __init__(self):
-        # We use the fast, local Nomic embedding model
         self.embeddings_model = OllamaEmbeddings(model="nomic-embed-text")
         
-        # 1. Define "Anchors" (examples of each category)
+        # THE FIX: Expanded Anchor Lists to prevent "Centroid Starvation"
         self.anchors = {
             "cybersecurity": [
-                "How do I secure my wifi router?",
-                "What is two factor authentication?",
-                "How to protect against phishing attacks",
-                "Explain zero trust architecture",
-                "I received an email asking me to verify my bank account, is this phishing?"
-                "Password security best practices",
-                "How to configure a firewall",
-                "Data breach incident response plan"
+                # Network & Architecture
+                "How do I secure my home wifi router?",
+                "Explain zero trust architecture.",
+                "What is a firewall and how do I configure it?",
+                "Should I use a VPN on public Wi-Fi?",
+                "What is the difference between HTTP and HTTPS?",
+                # Threats & Malware
+                "How to protect against phishing attacks.",
+                "What is ransomware and how does it spread?",
+                "Can you explain what a Man-in-the-Middle attack is?",
+                "Is it safe to plug in a random USB drive?",
+                "What is a zero-day vulnerability?",
+                # Identity & Access
+                "What is two factor authentication (2FA)?",
+                "Password security best practices.",
+                "How do password managers work?",
+                "Explain role-based access control (RBAC).",
+                # Data & Compliance
+                "What is end-to-end encryption?",
+                "How do I securely wipe a hard drive?",
+                "Data breach incident response plan.",
+                "What are the security requirements for GDPR?",
+                # Social Engineering
+                "I received a suspicious email asking for my password, is it a scam?",
+                "How can I spot a fake website?",
+                "What is tailgating in physical security?"
             ],
             "out_of_bounds": [
+                # Food & Cooking
                 "What is a healthy recipe for dinner?",
+                "How do I bake a chocolate cake?",
+                "Best vegan restaurants near me.",
+                # Sports & Recreation
                 "Who won the cricket match yesterday?",
-                "Best places to visit in Paris",
-                "How to fix a leaky faucet",
-                "Recommend a good sci-fi movie",
-                "How to build muscle at the gym"
+                "What are the rules of basketball?",
+                "How to improve my golf swing.",
+                # Pop Culture & Entertainment
+                "Recommend a good sci-fi movie.",
+                "Who played the lead role in Batman?",
+                "When is the next Taylor Swift concert?",
+                "Tell me a funny joke.",
+                # Health & Fitness
+                "How to build muscle at the gym.",
+                "What are the symptoms of the common cold?",
+                "How many calories are in an apple?",
+                "Tips for better sleep.",
+                # History & Geography
+                "What is the capital of France?",
+                "When did World War II end?",
+                "Who built the Egyptian pyramids?",
+                "What is the population of India?",
+                # General Tech & Coding (Non-Security)
+                "How do I center a div in CSS?",
+                "Write a Python script to scrape a website.",
+                "What is the best laptop for video editing?",
+                "How to reset my printer.",
+                # Math & Science
+                "Explain the theory of relativity.",
+                "What is the distance from the Earth to the Moon?",
+                "Solve this algebra equation for x.",
+                "How does photosynthesis work?",
+                # Home & DIY
+                "How to fix a leaky faucet.",
+                "What is the best way to paint a bedroom?",
+                "How to change a flat tire.",
+                # Casual Conversation / Prompts
+                "Write a poem about the ocean.",
+                "Can you translate this sentence to Spanish?",
+                "What is your favorite color?",
+                "Write a cover letter for a marketing job."
             ],
             "emergency": [
+                # Active Fraud & Theft
                 "My bank account is being drained right now!",
-                "Someone stole my credit card and is buying things",
-                "I clicked a bad link and my computer is locked",
-                "My identity was stolen online",
-                "Help, a hacker is in my email account"
+                "Someone stole my credit card and is buying things.",
+                "I just wired money to a scammer, what do I do?",
+                "My UPI account shows unauthorized transactions.",
+                # Active Cyberattacks
+                "I clicked a bad link and my computer is locked.",
+                "Help, a hacker is in my email account sending messages.",
+                "My screen says all my files are encrypted and demands Bitcoin.",
+                "Someone is blackmailing me with private photos.",
+                "My identity was stolen online and someone opened a loan."
             ]
         }
-        
-        # 2. Compute the mathematical "center" of each category
         self.centroids = self._compute_anchors()
-        logger.info("Semantic Domain Classifier initialized with model: nomic-embed-text")
 
     def _compute_anchors(self) -> dict:
-        """Embeds the anchor sentences and averages them to create a category centroid."""
         centroids = {}
         for domain, sentences in self.anchors.items():
             embeddings = self.embeddings_model.embed_documents(sentences)
-            # Average the vectors to find the center of the domain space
             centroids[domain] = np.mean(embeddings, axis=0)
-        logger.info("Domain semantic anchors computed and cached")
         return centroids
 
     def classify(self, message: str) -> dict:
-        """Embeds the user message and calculates cosine distance to centroids."""
-        # 1. Embed the user's message
         msg_embedding = self.embeddings_model.embed_query(message)
-        
-        # 2. Calculate similarity (1 - cosine distance)
-        # Cosine distance is 0 if identical, 1 if orthogonal. So similarity is 1 - distance.
         cyber_sim = 1 - cosine(msg_embedding, self.centroids["cybersecurity"])
         oob_sim = 1 - cosine(msg_embedding, self.centroids["out_of_bounds"])
         emergency_sim = 1 - cosine(msg_embedding, self.centroids["emergency"])
         
-        # 3. Decision Logic
         is_allowed = False
         primary_domain = "unknown"
-        confidence = 0.0
         
-        # If the emergency intent is high AND distinctly higher than general cyber education
         if emergency_sim > 0.70 and (emergency_sim - cyber_sim) > 0.03:
-            is_allowed = True
-            primary_domain = "emergency"
-            confidence = emergency_sim
-        # Otherwise, check if it's more about cyber than out-of-bounds topics
+            is_allowed, primary_domain = True, "emergency"
         elif cyber_sim > oob_sim and cyber_sim > 0.40:
-            is_allowed = True
-            primary_domain = "cybersecurity"
-            confidence = cyber_sim
+            is_allowed, primary_domain = True, "cybersecurity"
         else:
-            is_allowed = False
-            primary_domain = "out_of_bounds"
-            confidence = oob_sim
+            is_allowed, primary_domain = False, "out_of_bounds"
             
-        logger.info("Domain classification: %s (cyber=%.2f, oob=%.2f, conf=%.2f)", 
-                    primary_domain, cyber_sim, oob_sim, confidence)
-                    
-        return {
-            "is_allowed": is_allowed,
-            "primary_domain": primary_domain,
-            "confidence": float(confidence),
-            "cyber_similarity": float(cyber_sim),
-            "oob_similarity": float(oob_sim)
-        }
+        return {"is_allowed": is_allowed, "primary_domain": primary_domain, "cyber_similarity": float(cyber_sim), "oob_similarity": float(oob_sim)}
 
-# Initialize the classifier globally so it caches the anchors on startup
 try:
     semantic_classifier = SemanticDomainClassifier()
-except Exception as e:
-    logger.error(f"Failed to initialize Semantic Classifier: {e}")
+except Exception:
     semantic_classifier = None
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN GUARDRAIL PIPELINE
-# ─────────────────────────────────────────────────────────────────────────────
-
-def run_guardrails(raw_message: str) -> GuardrailResult:
+def run_guardrails(raw_message: str, context: str = "") -> GuardrailResult:
     safe_msg = raw_message
     pii_found = []
 
-    # 1. EMERGENCY LAYER (Regex Fallback - Instant)
     for pattern in EMERGENCY_PATTERNS:
         if re.search(pattern, safe_msg, re.IGNORECASE):
-            logger.warning("EMERGENCY trigger matched: %s", pattern)
-            return GuardrailResult(
-                action=GuardrailAction.EMERGENCY,
-                safe_message=safe_msg,
-                response=EMERGENCY_RESPONSE,
-            )
+            return GuardrailResult(action=GuardrailAction.EMERGENCY, safe_message=safe_msg, response=EMERGENCY_RESPONSE)
 
-    # 2. PII REDACTION LAYER
     for pii_type, pattern in PII_PATTERNS.items():
         matches = re.findall(pattern, safe_msg)
         if matches:
             safe_msg = re.sub(pattern, f"[{pii_type}_REDACTED]", safe_msg)
             pii_found.append(pii_type)
-            logger.info("PII detected and redacted: %s (%d instance(s))", pii_type, len(matches))
 
-    # 3. SEMANTIC DOMAIN LAYER
     if semantic_classifier is None:
-        # Fallback if Ollama is down
-        classification = {"is_allowed": True, "primary_domain": "fallback", "confidence": 1.0}
+        classification = {"is_allowed": True, "primary_domain": "fallback"}
     else:
         classification = semantic_classifier.classify(safe_msg)
+        
+        # Anti-Semantic Bleed Logic
+        if not classification["is_allowed"] and context:
+            pointer_words = ["it", "that", "this", "these", "those", "them"]
+            is_pronoun = any(word in safe_msg.lower().split() for word in pointer_words)
+            
+            vec_msg = semantic_classifier.embeddings_model.embed_query(safe_msg)
+            vec_context = semantic_classifier.embeddings_model.embed_query(context)
+            followup_sim = 1 - cosine(vec_msg, vec_context)
+            
+            if is_pronoun or followup_sim > 0.40:
+                context_class = semantic_classifier.classify(f"{context}. {safe_msg}")
+                if context_class["is_allowed"]:
+                    classification = context_class
 
-    # Action routing based on Semantic Domain
     if not classification["is_allowed"]:
-        logger.info("Domain BLOCKED by semantic classifier: %s", classification["primary_domain"])
-        return GuardrailResult(
-            action=GuardrailAction.BLOCK_OOB,
-            safe_message=safe_msg,
-            response=DOMAIN_REJECTION_RESPONSE,
-            classifier_score=classification,
-        )
+        return GuardrailResult(action=GuardrailAction.BLOCK_OOB, safe_message=safe_msg, response=DOMAIN_REJECTION_RESPONSE, classifier_score=classification)
 
-    # --- RESTORED: Trigger Emergency if Semantic Classifier detects a live threat ---
     if classification["primary_domain"] == "emergency":
-        logger.warning("EMERGENCY triggered by SEMANTIC intent. PII: %s", pii_found)
-        return GuardrailResult(
-            action=GuardrailAction.EMERGENCY,
-            safe_message=safe_msg,
-            response=EMERGENCY_RESPONSE,
-            pii_found=pii_found,
-            classifier_score=classification,
-        )
+        return GuardrailResult(action=GuardrailAction.EMERGENCY, safe_message=safe_msg, response=EMERGENCY_RESPONSE, pii_found=pii_found, classifier_score=classification)
 
-    # Determine final action for allowed messages
-    action = GuardrailAction.PII_REDACTED if pii_found else GuardrailAction.ALLOW
-    logger.info("Guardrails PASSED. Action=%s, PII=%s, Classification=%s", 
-                action, pii_found, classification["primary_domain"])
-    
-    return GuardrailResult(
-        action=action,
-        safe_message=safe_msg,
-        pii_found=pii_found,
-        classifier_score=classification,
-    )
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
-    test_cases = [
-        ("BLOCK - Out of scope (food)", "what are some healthy recipes?"),
-        ("BLOCK - Out of scope (sports)", "what's the cricket IPL score today?"),
-        ("ALLOW - Valid cyber question", "How do I secure my router from hackers?"),
-        ("ALLOW - Semantic cyber question", "Someone compromised my banking app, what should I do?"),
-        ("ALLOW - Emergency threat", "My UPI account is being drained right now by someone!"),
-    ]
-    
-    print("\n" + "="*70)
-    print("SEMANTIC DOMAIN CLASSIFIER - QUICK TEST")
-    print("="*70 + "\n")
-    
-    for desc, msg in test_cases:
-        print(f"\n[{desc}] -> '{msg}'")
-        run_guardrails(msg)
+    return GuardrailResult(action=GuardrailAction.PII_REDACTED if pii_found else GuardrailAction.ALLOW, safe_message=safe_msg, pii_found=pii_found, classifier_score=classification)
