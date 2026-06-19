@@ -31,7 +31,7 @@ embeddings = OllamaEmbeddings(model="nomic-embed-text")
 db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
 
 # 2. RESTORED: Local Llama 3.2 (1B) setup with k=6 for maximum speed/context
-llm = ChatOllama(model="llama3.2:1b", temperature=0)
+llm = ChatOllama(model="llama3", temperature=0)
 qa_chain = RetrievalQA.from_chain_type(
     llm=llm, 
     chain_type="stuff", 
