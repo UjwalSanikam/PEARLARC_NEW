@@ -92,6 +92,8 @@ export default function App() {
         text: data.reply || 'No response generated.',
         action: data.action,
         pii: data.pii_redacted,
+        scores: data.domain_scores, // Catch domain scores for XAI
+        sources: data.sources || [], // Catch FAISS sources for XAI
       }]);
     } catch (error) {
       console.error('Network Error:', error);
@@ -193,6 +195,52 @@ export default function App() {
                   )}
 
                   <div className="bubble-text">{msg.text}</div>
+
+                  {/* --- HYBRID XAI UI PART 1: Your Citation Chips --- */}
+                  {msg.role === 'ai' && msg.sources && msg.sources.length > 0 && (
+                    <div className="source-citations">
+                      <span className="source-label">Sources used:</span>
+                      {msg.sources.map((src, i) => (
+                        <span key={i} className="source-chip">
+                          📄 {src.source} (Page {src.page})
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* --- HYBRID XAI UI PART 2: Her Deep-Dive Accordion --- */}
+                  {msg.role === 'ai' && msg.action === 'allow' && (msg.sources?.length > 0 || msg.scores) && (
+                    <details style={{ marginTop: '12px', fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                      <summary style={{ cursor: 'pointer', fontWeight: 'bold', outline: 'none' }}>
+                        🔍 View AI Reasoning & Context Snippets
+                      </summary>
+                      <div style={{ marginTop: '8px', padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+
+                        {/* Show Guardrail Math */}
+                        {msg.scores && msg.scores.primary_domain && (
+                          <div style={{ marginBottom: '8px' }}>
+                            <strong>Domain Routing:</strong> Passed as <em>{msg.scores.primary_domain}</em>
+                            {' '}(Cyber Sim: {(msg.scores.cyber_similarity * 100).toFixed(1)}%, OOB Sim: {(msg.scores.oob_similarity * 100).toFixed(1)}%)
+                          </div>
+                        )}
+
+                        {/* Show RAG Snippets */}
+                        {msg.sources && msg.sources.length > 0 && (
+                          <div>
+                            <strong>Context Snippets from FAISS:</strong>
+                            <ul style={{ margin: '6px 0 0 0', paddingLeft: '20px' }}>
+                              {msg.sources.map((src, i) => (
+                                <li key={i} style={{ marginBottom: '6px', fontStyle: 'italic', lineHeight: '1.4' }}>
+                                  "{src.snippet}"
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                      </div>
+                    </details>
+                  )}
 
                   {msg.pii && msg.pii.length > 0 && (
                     <div className="bubble-pii">
@@ -537,6 +585,45 @@ const CSS = `
 
 .bubble-text {
   white-space: pre-wrap;
+}
+
+/* --- Explainable AI (Source Citations) --- */
+.source-citations {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-strong);
+}
+
+.source-label {
+  font-size: 0.70rem;
+  color: var(--text-tertiary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.source-chip {
+  background-color: rgba(45, 212, 191, 0.08); 
+  color: var(--accent);                           
+  border: 1px solid rgba(45, 212, 191, 0.3);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.source-chip:hover {
+  background-color: rgba(45, 212, 191, 0.15);
+  border-color: rgba(45, 212, 191, 0.5);
+  cursor: default;
 }
 
 .bubble-pii {

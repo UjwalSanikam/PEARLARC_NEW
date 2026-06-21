@@ -54,16 +54,21 @@ async def chat_with_ai(req: ChatRequest):
         )
 
     # Generate AI Response via RAG pipeline
+# 4. Generate AI Response via RAG pipeline
+# Generate AI Response via RAG pipeline
     try:
         print("[DEBUG] Executing RAG Pipeline via rag_engine.py...")
-        ai_reply = generate_ai_response(result.safe_message)
-        print("[DEBUG] Response successfully generated and appended to memory.")
+        
+        # --- HYBRID UPDATE: Unpack the tuple ---
+        ai_reply, source_docs = generate_ai_response(result.safe_message)
+        print(f"[DEBUG] Response successfully generated with {len(source_docs)} citations.")
 
         return ChatResponse(
             reply=ai_reply,
             action=result.action.value,
             pii_redacted=result.pii_found,
             domain_scores=result.classifier_score,
+            sources=source_docs # <-- Pass hybrid sources to frontend
         )
     except Exception as e:
         print(f"[DEBUG] Pipeline Crash Detected: {str(e)}")
@@ -72,4 +77,5 @@ async def chat_with_ai(req: ChatRequest):
             action="error",
             pii_redacted=result.pii_found,
             domain_scores=result.classifier_score,
+            sources=[]
         )

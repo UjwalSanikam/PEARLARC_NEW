@@ -58,6 +58,9 @@ class SemanticDomainClassifier:
                 "Is it safe to plug in a random USB drive?",
                 "What is a zero-day vulnerability?",
                 # Identity & Access
+                # --- NEW: Balanced Phishing Anchors ---
+                "I received an email asking me to verify my bank account by clicking a link — is this phishing?",
+                "How can I tell if a bank email with a link is legitimate or a scam?",
                 "What is two factor authentication (2FA)?",
                 "Password security best practices.",
                 "How do password managers work?",

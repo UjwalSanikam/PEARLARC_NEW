@@ -1,4 +1,4 @@
-# this file has the input/output format so we ever wanna change the input output format we change it here 
+# backend/schemas.py
 from pydantic import BaseModel
 
 class ChatRequest(BaseModel):
@@ -9,3 +9,4 @@ class ChatResponse(BaseModel):
     action: str
     pii_redacted: list[str] = []
     domain_scores: dict = {}
+    sources: list[dict] = []  # <-- HYBRID: Accepts objects containing both metadata and snippets
