@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Shield, ShieldAlert, ShieldCheck, Send, AlertTriangle, Lock,
-  RefreshCw, CheckCircle2, Search, Wifi, WifiOff, Loader2
+  RefreshCw, CheckCircle2, Search, Wifi, WifiOff, Loader2, FileText
 } from 'lucide-react';
 
 const INITIAL_MESSAGES = [
@@ -50,6 +50,15 @@ function threatFromAction(action) {
   return { label: 'LOW', tone: 'success' };
 }
 
+// Shows XAI accordion for any message that has intel to show
+function shouldShowXai(msg) {
+  return (
+    msg.role === 'ai' &&
+    (msg.action === 'allow' || msg.action === 'pii_redacted') &&
+    (msg.sources?.length > 0 || msg.scores?.primary_domain)
+  );
+}
+
 export default function App() {
   const [messages, setMessages] = useState(INITIAL_MESSAGES);
   const [input, setInput] = useState('');
@@ -92,8 +101,8 @@ export default function App() {
         text: data.reply || 'No response generated.',
         action: data.action,
         pii: data.pii_redacted,
-        scores: data.domain_scores, // Catch domain scores for XAI
-        sources: data.sources || [], // Catch FAISS sources for XAI
+        scores: data.domain_scores,
+        sources: data.sources || [],
       }]);
     } catch (error) {
       console.error('Network Error:', error);
@@ -130,11 +139,26 @@ export default function App() {
   const threat = threatFromAction(lastAiMessage?.action);
 
   const pipeline = [
-    { label: 'Domain Classify', active: !!lastAiMessage },
-    { label: 'PII Detection', active: !!lastAiMessage, flagged: lastAiMessage?.pii?.length > 0 },
     { label: 'Emergency Scan', active: !!lastAiMessage, flagged: lastAiMessage?.action === 'emergency' },
+    { label: 'PII Detection', active: !!lastAiMessage, flagged: lastAiMessage?.pii?.length > 0 },
+    { label: 'Domain Classify', active: !!lastAiMessage },
+    { label: 'RAG Pipeline', active: !!lastAiMessage && (lastAiMessage.action === 'allow' || lastAiMessage.action === 'pii_redacted') },
     { label: 'Response Sent', active: !!lastAiMessage },
   ];
+
+  // Domain scores from the last AI message that has them
+  const lastScores = useMemo(
+    () => [...messages].reverse().find((m) => m.role === 'ai' && m.scores?.primary_domain)?.scores,
+    [messages]
+  );
+
+  const domainScores = lastScores
+    ? [
+      { label: 'Cyber Match', value: lastScores.cyber_similarity, tone: 'accent' },
+      { label: 'Emergency Risk', value: lastScores.emergency_similarity, tone: 'danger' },
+      { label: 'Out-of-Domain', value: lastScores.oob_similarity, tone: 'warning' },
+    ]
+    : null;
 
   const resetChat = () => setMessages(INITIAL_MESSAGES);
 
@@ -196,42 +220,55 @@ export default function App() {
 
                   <div className="bubble-text">{msg.text}</div>
 
-                  {/* --- HYBRID XAI UI PART 1: Your Citation Chips --- */}
+                  {/* Source citation chips */}
                   {msg.role === 'ai' && msg.sources && msg.sources.length > 0 && (
                     <div className="source-citations">
                       <span className="source-label">Sources used:</span>
                       {msg.sources.map((src, i) => (
                         <span key={i} className="source-chip">
-                          📄 {src.source} (Page {src.page})
+                          <FileText size={11} />
+                          {src.source} · p.{src.page}
                         </span>
                       ))}
                     </div>
                   )}
 
-                  {/* --- HYBRID XAI UI PART 2: Her Deep-Dive Accordion --- */}
-                  {msg.role === 'ai' && msg.action === 'allow' && (msg.sources?.length > 0 || msg.scores) && (
-                    <details style={{ marginTop: '12px', fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-                      <summary style={{ cursor: 'pointer', fontWeight: 'bold', outline: 'none' }}>
-                        🔍 View AI Reasoning & Context Snippets
+                  {/* XAI accordion — now also fires for pii_redacted messages */}
+                  {shouldShowXai(msg) && (
+                    <details className="xai-accordion">
+                      <summary className="xai-summary">
+                        <Search size={12} />
+                        View AI reasoning &amp; context snippets
                       </summary>
-                      <div style={{ marginTop: '8px', padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                      <div className="xai-body">
 
-                        {/* Show Guardrail Math */}
-                        {msg.scores && msg.scores.primary_domain && (
-                          <div style={{ marginBottom: '8px' }}>
-                            <strong>Domain Routing:</strong> Passed as <em>{msg.scores.primary_domain}</em>
-                            {' '}(Cyber Sim: {(msg.scores.cyber_similarity * 100).toFixed(1)}%, OOB Sim: {(msg.scores.oob_similarity * 100).toFixed(1)}%)
+                        {/* Domain routing line */}
+                        {msg.scores?.primary_domain && (
+                          <div className="xai-section">
+                            <span className="xai-section-label">Domain routing</span>
+                            <span className="xai-route">
+                              Classified as{' '}
+                              <strong>{msg.scores.primary_domain}</strong>
+                              {' · '}Cyber {(msg.scores.cyber_similarity * 100).toFixed(1)}%
+                              {' · '}OOB {(msg.scores.oob_similarity * 100).toFixed(1)}%
+                              {msg.scores.emergency_similarity !== undefined && (
+                                <> · Emergency {(msg.scores.emergency_similarity * 100).toFixed(1)}%</>
+                              )}
+                            </span>
                           </div>
                         )}
 
-                        {/* Show RAG Snippets */}
-                        {msg.sources && msg.sources.length > 0 && (
-                          <div>
-                            <strong>Context Snippets from FAISS:</strong>
-                            <ul style={{ margin: '6px 0 0 0', paddingLeft: '20px' }}>
+                        {/* RAG snippets */}
+                        {msg.sources?.length > 0 && (
+                          <div className="xai-section">
+                            <span className="xai-section-label">Context snippets from FAISS</span>
+                            <ul className="xai-snippets">
                               {msg.sources.map((src, i) => (
-                                <li key={i} style={{ marginBottom: '6px', fontStyle: 'italic', lineHeight: '1.4' }}>
-                                  "{src.snippet}"
+                                <li key={i} className="xai-snippet">
+                                  <span className="xai-snippet-source">
+                                    <FileText size={10} /> {src.source} p.{src.page}
+                                  </span>
+                                  <span className="xai-snippet-text">"{src.snippet}"</span>
                                 </li>
                               ))}
                             </ul>
@@ -297,9 +334,7 @@ export default function App() {
 
             <div className="status-line">
               <span>CLASSIFIER: {isLoading ? 'ANALYZING' : 'READY'}</span>
-              <span>
-                PII: {lastAiMessage?.pii?.length > 0 ? 'DETECTED' : 'NONE DETECTED'}
-              </span>
+              <span>PII: {lastAiMessage?.pii?.length > 0 ? 'DETECTED' : 'NONE DETECTED'}</span>
             </div>
             <div className="disclaimer">CYBERSECURITY AI can make mistakes. Verify critical security configurations.</div>
           </div>
@@ -328,6 +363,31 @@ export default function App() {
               </div>
             </div>
           </div>
+
+          {/* Domain Scores panel — appears after first real response */}
+          {domainScores && (
+            <div className="panel">
+              <h3 className="panel-title">Domain Scores</h3>
+              <div className="score-list">
+                {domainScores.map((s) => (
+                  <div key={s.label} className="score-row">
+                    <div className="score-meta">
+                      <span className="score-name">{s.label}</span>
+                      <span className={`score-pct score-pct-${s.tone}`}>
+                        {(s.value * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                    <div className="score-track">
+                      <div
+                        className={`score-fill score-fill-${s.tone}`}
+                        style={{ width: `${Math.min(s.value * 100, 100).toFixed(1)}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="panel">
             <h3 className="panel-title">Pipeline Status</h3>
@@ -413,9 +473,7 @@ const CSS = `
   gap: 10px;
 }
 
-.brand-icon {
-  color: var(--accent);
-}
+.brand-icon { color: var(--accent); }
 
 .brand-text {
   display: flex;
@@ -458,9 +516,9 @@ const CSS = `
 }
 
 .pill-success { color: var(--success); border-color: rgba(52,211,153,0.3); background: var(--success-bg); }
-.pill-danger { color: var(--danger); border-color: rgba(255,84,104,0.3); background: var(--danger-bg); }
+.pill-danger  { color: var(--danger);  border-color: rgba(255,84,104,0.3);  background: var(--danger-bg);  }
 .pill-warning { color: var(--warning); border-color: rgba(255,176,32,0.3); background: var(--warning-bg); }
-.pill-neutral { color: var(--accent); border-color: rgba(45,212,191,0.3); background: rgba(45,212,191,0.08); }
+.pill-neutral { color: var(--accent);  border-color: rgba(45,212,191,0.3);  background: rgba(45,212,191,0.08); }
 
 .icon-button {
   display: flex;
@@ -511,9 +569,7 @@ const CSS = `
   align-items: flex-start;
 }
 
-.row-user {
-  justify-content: flex-end;
-}
+.row-user { justify-content: flex-end; }
 
 .avatar {
   width: 30px;
@@ -536,36 +592,11 @@ const CSS = `
   line-height: 1.55;
 }
 
-.bubble-user {
-  background: #115e59;
-  color: #ecfdf9;
-  border-bottom-right-radius: 4px;
-}
-
-.bubble-ai {
-  background: var(--panel-raised);
-  border: 1px solid var(--border);
-  color: var(--text-primary);
-  border-bottom-left-radius: 4px;
-}
-
-.bubble-emergency {
-  background: var(--danger-bg);
-  border-color: rgba(255, 84, 104, 0.4);
-  color: #ffd7dc;
-}
-
-.bubble-block {
-  background: var(--warning-bg);
-  border-color: rgba(255, 176, 32, 0.4);
-  color: #ffe7b8;
-}
-
-.bubble-error {
-  background: rgba(140, 140, 140, 0.08);
-  border-color: var(--border-strong);
-  color: var(--text-secondary);
-}
+.bubble-user      { background: #115e59; color: #ecfdf9; border-bottom-right-radius: 4px; }
+.bubble-ai        { background: var(--panel-raised); border: 1px solid var(--border); color: var(--text-primary); border-bottom-left-radius: 4px; }
+.bubble-emergency { background: var(--danger-bg); border-color: rgba(255, 84, 104, 0.4); color: #ffd7dc; }
+.bubble-block     { background: var(--warning-bg); border-color: rgba(255, 176, 32, 0.4); color: #ffe7b8; }
+.bubble-error     { background: rgba(140, 140, 140, 0.08); border-color: var(--border-strong); color: var(--text-secondary); }
 
 .bubble-flag {
   display: flex;
@@ -579,53 +610,140 @@ const CSS = `
   margin-bottom: 8px;
 }
 
-.bubble-flag-warning {
-  color: var(--warning);
-}
+.bubble-flag-warning { color: var(--warning); }
 
-.bubble-text {
-  white-space: pre-wrap;
-}
+.bubble-text { white-space: pre-wrap; }
 
-/* --- Explainable AI (Source Citations) --- */
+/* Source citations */
 .source-citations {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-top: 12px;
-  padding-top: 12px;
+  padding-top: 10px;
   border-top: 1px solid var(--border-strong);
 }
 
 .source-label {
-  font-size: 0.70rem;
+  font-size: 0.68rem;
   color: var(--text-tertiary);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  width: 100%;
 }
 
 .source-chip {
-  background-color: rgba(45, 212, 191, 0.08); 
-  color: var(--accent);                           
-  border: 1px solid rgba(45, 212, 191, 0.3);
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 0.72rem;
-  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  transition: all 0.2s ease;
+  gap: 5px;
+  background: rgba(45, 212, 191, 0.08);
+  color: var(--accent);
+  border: 1px solid rgba(45, 212, 191, 0.3);
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 0.71rem;
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  transition: background 0.15s ease;
 }
 
 .source-chip:hover {
-  background-color: rgba(45, 212, 191, 0.15);
+  background: rgba(45, 212, 191, 0.15);
   border-color: rgba(45, 212, 191, 0.5);
-  cursor: default;
 }
 
+/* XAI Accordion */
+.xai-accordion {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-strong);
+  padding-top: 8px;
+}
+
+.xai-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  list-style: none;
+  outline: none;
+  user-select: none;
+  transition: color 0.15s ease;
+}
+
+.xai-summary::-webkit-details-marker { display: none; }
+.xai-summary::marker { display: none; }
+
+.xai-summary:hover { color: var(--text-secondary); }
+
+.xai-body {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.xai-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.xai-section-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+}
+
+.xai-route {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  line-height: 1.5;
+}
+
+.xai-snippets {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.xai-snippet {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.xai-snippet-source {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.65rem;
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.xai-snippet-text {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-style: italic;
+  line-height: 1.45;
+}
+
+/* PII badge */
 .bubble-pii {
   display: flex;
   align-items: center;
@@ -644,13 +762,9 @@ const CSS = `
   color: var(--text-secondary);
 }
 
-.spin {
-  animation: aegis-spin 1s linear infinite;
-}
+.spin { animation: aegis-spin 1s linear infinite; }
 
-@keyframes aegis-spin {
-  to { transform: rotate(360deg); }
-}
+@keyframes aegis-spin { to { transform: rotate(360deg); } }
 
 /* Composer */
 .composer {
@@ -681,15 +795,8 @@ const CSS = `
   transition: all 0.15s ease;
 }
 
-.chip:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--text-primary);
-}
-
-.chip:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+.chip:hover:not(:disabled) { border-color: var(--accent); color: var(--text-primary); }
+.chip:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .input-bar {
   display: flex;
@@ -701,9 +808,7 @@ const CSS = `
   padding: 6px 6px 6px 16px;
 }
 
-.input-bar:focus-within {
-  border-color: var(--accent);
-}
+.input-bar:focus-within { border-color: var(--accent); }
 
 .input-bar input {
   flex: 1;
@@ -715,9 +820,7 @@ const CSS = `
   padding: 8px 0;
 }
 
-.input-bar input::placeholder {
-  color: var(--text-tertiary);
-}
+.input-bar input::placeholder { color: var(--text-tertiary); }
 
 .input-bar button {
   display: flex;
@@ -733,10 +836,7 @@ const CSS = `
   transition: opacity 0.15s ease;
 }
 
-.input-bar button:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
+.input-bar button:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .status-line {
   display: flex;
@@ -772,9 +872,7 @@ const CSS = `
   padding: 16px;
 }
 
-.panel-muted {
-  background: transparent;
-}
+.panel-muted { background: transparent; }
 
 .panel-title {
   margin: 0 0 12px;
@@ -785,11 +883,7 @@ const CSS = `
   color: var(--text-tertiary);
 }
 
-.stat-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
 .stat-card {
   display: flex;
@@ -807,15 +901,53 @@ const CSS = `
   font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
 }
 
-.stat-danger { color: var(--danger); }
+.stat-danger  { color: var(--danger);  }
 .stat-warning { color: var(--warning); }
 .stat-success { color: var(--success); }
 
-.stat-label {
-  font-size: 0.68rem;
-  color: var(--text-tertiary);
+.stat-label { font-size: 0.68rem; color: var(--text-tertiary); }
+
+/* Domain Score bars */
+.score-list { display: flex; flex-direction: column; gap: 10px; }
+
+.score-row { display: flex; flex-direction: column; gap: 4px; }
+
+.score-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
+.score-name { font-size: 0.75rem; color: var(--text-secondary); }
+
+.score-pct {
+  font-size: 0.72rem;
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  font-weight: 600;
+}
+
+.score-pct-accent  { color: var(--accent);  }
+.score-pct-danger  { color: var(--danger);  }
+.score-pct-warning { color: var(--warning); }
+
+.score-track {
+  height: 4px;
+  background: var(--border-strong);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.score-fill {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 0.4s ease;
+}
+
+.score-fill-accent  { background: var(--accent);  }
+.score-fill-danger  { background: var(--danger);  }
+.score-fill-warning { background: var(--warning); }
+
+/* Pipeline */
 .pipeline-list {
   list-style: none;
   margin: 0;
@@ -833,17 +965,10 @@ const CSS = `
   color: var(--text-tertiary);
 }
 
-.pipeline-list li.pipeline-active {
-  color: var(--text-primary);
-}
+.pipeline-list li.pipeline-active { color: var(--text-primary); }
 
-.pipeline-icon-ok {
-  color: var(--success);
-}
-
-.pipeline-icon-flagged {
-  color: var(--warning);
-}
+.pipeline-icon-ok      { color: var(--success); }
+.pipeline-icon-flagged { color: var(--warning); }
 
 .pipeline-dot-idle {
   width: 14px;
@@ -874,8 +999,6 @@ const CSS = `
     flex-direction: row;
     overflow-x: auto;
   }
-  .sidebar .panel {
-    min-width: 220px;
-  }
+  .sidebar .panel { min-width: 220px; }
 }
 `;
