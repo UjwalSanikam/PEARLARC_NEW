@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Shield, ShieldAlert, ShieldCheck, Send, AlertTriangle, Lock,
-  RefreshCw, CheckCircle2, Search, Wifi, WifiOff, Loader2, FileText
+  RefreshCw, CheckCircle2, Search, Wifi, WifiOff, Loader2, FileText, Plus, Trash2
 } from 'lucide-react';
 
 const INITIAL_MESSAGES = [
@@ -60,11 +60,115 @@ function shouldShowXai(msg) {
 }
 
 export default function App() {
-  const [messages, setMessages] = useState(INITIAL_MESSAGES);
+  // Multi-chat state management
+  const [chats, setChats] = useState(() => {
+    try {
+      const saved = localStorage.getItem('allChats');
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      console.warn('Failed to load chats:', e);
+      return {};
+    }
+  });
+
+  const [currentChatId, setCurrentChatId] = useState(() => {
+    try {
+      const saved = localStorage.getItem('currentChatId');
+      if (saved && chats[saved]) return saved;
+      // If no valid saved chat, use first available or create new
+      const chatIds = Object.keys(chats);
+      return chatIds.length > 0 ? chatIds[0] : null;
+    } catch (e) {
+      return null;
+    }
+  });
+
   const [input, setInput] = useState('');
   const [status, setStatus] = useState('Checking connection...');
   const [isLoading, setIsLoading] = useState(false);
   const scrollRef = useRef(null);
+
+  // Helper to get or create a chat
+  const getCurrentChat = () => {
+    if (!currentChatId || !chats[currentChatId]) {
+      return { messages: INITIAL_MESSAGES, title: 'New Chat' };
+    }
+    return chats[currentChatId];
+  };
+
+  const currentChat = getCurrentChat();
+  const messages = currentChat.messages;
+
+  // Create a new chat
+  const createNewChat = () => {
+    const newId = `chat-${Date.now()}`;
+    setChats((prev) => ({
+      ...prev,
+      [newId]: { messages: INITIAL_MESSAGES, title: 'New Chat', createdAt: new Date().toISOString() },
+    }));
+    setCurrentChatId(newId);
+  };
+
+  // Switch to a chat
+  const switchChat = (chatId) => {
+    setCurrentChatId(chatId);
+    setInput('');
+  };
+
+  // Delete a chat
+  const deleteChat = (chatId) => {
+    setChats((prev) => {
+      const updated = { ...prev };
+      delete updated[chatId];
+      return updated;
+    });
+    // If deleting current chat, switch to another
+    if (chatId === currentChatId) {
+      const remainingIds = Object.keys(chats).filter((id) => id !== chatId);
+      if (remainingIds.length > 0) {
+        setCurrentChatId(remainingIds[0]);
+      } else {
+        createNewChat();
+      }
+    }
+  };
+
+  // Update messages for current chat
+  const setMessages = (updateFn) => {
+    setChats((prev) => {
+      const updated = { ...prev };
+      const chat = updated[currentChatId] || { messages: INITIAL_MESSAGES, title: 'New Chat' };
+      const newMessages = typeof updateFn === 'function' ? updateFn(chat.messages) : updateFn;
+
+      // Auto-generate title from first user message if still "New Chat"
+      let title = chat.title;
+      if (title === 'New Chat' && newMessages.length > 1) {
+        const firstUserMsg = newMessages.find((m) => m.role === 'user');
+        if (firstUserMsg) {
+          title = firstUserMsg.text.substring(0, 40) + (firstUserMsg.text.length > 40 ? '...' : '');
+        }
+      }
+
+      updated[currentChatId] = { ...chat, messages: newMessages, title };
+      return updated;
+    });
+  };
+
+  // Save chats to localStorage
+  useEffect(() => {
+    localStorage.setItem('allChats', JSON.stringify(chats));
+  }, [chats]);
+
+  useEffect(() => {
+    localStorage.setItem('currentChatId', currentChatId || '');
+  }, [currentChatId]);
+
+  // Initialize first chat if none exist
+  useEffect(() => {
+    if (Object.keys(chats).length === 0 && !currentChatId) {
+      createNewChat();
+    }
+  }, []);
 
   useEffect(() => {
     fetch('http://127.0.0.1:8000/api/status')
@@ -160,7 +264,9 @@ export default function App() {
     ]
     : null;
 
-  const resetChat = () => setMessages(INITIAL_MESSAGES);
+  const resetChat = () => {
+    setMessages(INITIAL_MESSAGES);
+  };
 
   return (
     <div className="aegis-app">
@@ -195,6 +301,35 @@ export default function App() {
       </header>
 
       <div className="aegis-body">
+        {/* Chat History Sidebar */}
+        <nav className="chat-history-sidebar">
+          <button className="new-chat-btn" onClick={createNewChat}>
+            <Plus size={16} />
+            New Chat
+          </button>
+          <div className="chat-list">
+            {Object.entries(chats).map(([chatId, chat]) => (
+              <div
+                key={chatId}
+                className={`chat-item ${chatId === currentChatId ? 'active' : ''}`}
+                onClick={() => switchChat(chatId)}
+              >
+                <div className="chat-item-title">{chat.title}</div>
+                <button
+                  className="chat-item-delete"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteChat(chatId);
+                  }}
+                  aria-label="Delete chat"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </nav>
+
         {/* Chat column */}
         <main className="chat-column">
           <div className="chat-scroll" ref={scrollRef}>
@@ -543,8 +678,108 @@ const CSS = `
 .aegis-body {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 300px;
+  grid-template-columns: 240px 1fr 300px;
   min-height: 0;
+}
+
+.chat-history-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 12px;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.new-chat-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: rgba(45, 212, 191, 0.08);
+  color: var(--accent);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.new-chat-btn:hover {
+  background: rgba(45, 212, 191, 0.15);
+  border-color: var(--accent);
+}
+
+.chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  group: "chat";
+}
+
+.chat-item:hover {
+  background: var(--panel-raised);
+  border-color: var(--border-strong);
+}
+
+.chat-item.active {
+  background: var(--panel-raised);
+  border-color: var(--accent);
+}
+
+.chat-item-title {
+  flex: 1;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-item.active .chat-item-title {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.chat-item-delete {
+  display: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.chat-item:hover .chat-item-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-item-delete:hover {
+  background: rgba(255, 84, 104, 0.2);
+  color: var(--danger);
 }
 
 .chat-column {
