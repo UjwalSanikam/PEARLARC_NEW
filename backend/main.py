@@ -11,6 +11,11 @@ from rag_engine import generate_ai_response
 # --- NEW: Import Database Components ---
 from database import engine, Base, get_db, ChatSession, ChatMessage
 
+from fastapi import UploadFile, File
+import shutil
+import os
+from create_db import build_database
+
 # --- NEW: Generate Tables on Startup ---
 print("Generating database tables...")
 Base.metadata.create_all(bind=engine)
