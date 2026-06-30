@@ -1,5 +1,6 @@
 # backend/security_guardrails.py
 import re
+import difflib
 import logging
 import numpy as np
 from dataclasses import dataclass, field
@@ -37,6 +38,110 @@ EMERGENCY_PATTERNS = [
     r"\b(stolen|lost)\s*(money|funds|wallet)\b",
     r"\b(bank|account|upi)\s*(hacked|compromised|drained)\b"
 ]
+
+# ---------------------------------------------------------------------------
+# Prompt normalisation — Step 0, runs before everything else
+# ---------------------------------------------------------------------------
+
+CYBER_KEYWORDS = [
+    "phishing", "malware", "ransomware", "firewall", "encryption",
+    "password", "hacker", "virus", "trojan", "vulnerability",
+    "authentication", "spoofing", "keylogger", "botnet", "exploit",
+    "credential", "cybersecurity", "zero-day", "intrusion", "forensics",
+    "backdoor", "rootkit", "spyware", "ddos", "brute-force",
+    "two-factor", "multi-factor", "certificate", "phisher", "malicious",
+    "suspicious", "unauthorized", "encrypted", "decryption", "sandbox",
+    "honeypot", "penetration", "packet", "protocol", "network",
+]
+
+_CYBER_KEYWORD_SET = set(CYBER_KEYWORDS)
+
+_FUZZY_MIN_LEN = 5
+_FUZZY_CUTOFF  = 0.78
+_SPELL_MIN_LEN = 4
+
+
+def _fix_cyber_typos(message: str) -> str:
+    """
+    Pass 1 — replace near-misses against CYBER_KEYWORDS using difflib.
+    e.g. 'ransomwear' → 'ransomware', 'fising' → 'phishing'
+    """
+    tokens = message.split()
+    out = []
+    for token in tokens:
+        clean = re.sub(r"[^\w-]", "", token).lower()
+        if len(clean) >= _FUZZY_MIN_LEN:
+            matches = difflib.get_close_matches(
+                clean, CYBER_KEYWORDS, n=1, cutoff=_FUZZY_CUTOFF
+            )
+            if matches and matches[0] != clean:
+                logger.debug("[Normalise] Cyber typo: '%s' → '%s'", clean, matches[0])
+                out.append(matches[0])
+                continue
+        out.append(token)
+    return " ".join(out)
+
+
+try:
+    from spellchecker import SpellChecker
+    _spell = SpellChecker()
+    _SPELL_AVAILABLE = True
+except ImportError:
+    _spell = None
+    _SPELL_AVAILABLE = False
+    logger.info(
+        "[Normalise] pyspellchecker not installed — general spell correction disabled. "
+        "Run `pip install pyspellchecker` to enable."
+    )
+
+
+def _fix_general_spelling(message: str) -> str:
+    """
+    Pass 2 — fix everyday English spelling errors using pyspellchecker.
+    Skips words already in _CYBER_KEYWORD_SET (protect domain terms)
+    and tokens shorter than _SPELL_MIN_LEN (acronyms: vpn, 2fa, url …).
+    e.g. 'recieved' → 'received', 'pasword' → 'password'
+    """
+    if not _SPELL_AVAILABLE:
+        return message
+
+    tokens = message.split()
+    out = []
+    for token in tokens:
+        clean = re.sub(r"[^\w]", "", token).lower()
+        if clean in _CYBER_KEYWORD_SET or len(clean) < _SPELL_MIN_LEN:
+            out.append(token)
+            continue
+        suggestion = _spell.correction(clean)
+        if suggestion and suggestion != clean:
+            logger.debug("[Normalise] Spell fix: '%s' → '%s'", clean, suggestion)
+            out.append(suggestion)
+        else:
+            out.append(token)
+    return " ".join(out)
+
+
+def normalise_prompt(raw_message: str) -> str:
+    """
+    Entry point for Step 0.  Takes the raw user message, runs both
+    correction passes, and returns a clean prompt for all downstream steps.
+
+    Pipeline:
+        raw_message
+            → _fix_cyber_typos()      # domain-specific fuzzy correction
+            → _fix_general_spelling() # general English spell correction
+            → normalised prompt
+    """
+    msg = _fix_cyber_typos(raw_message)
+    msg = _fix_general_spelling(msg)
+    if msg != raw_message:
+        logger.debug("[Normalise] '%s' → '%s'", raw_message, msg)
+    return msg
+
+
+# ---------------------------------------------------------------------------
+# Semantic domain classifier
+# ---------------------------------------------------------------------------
 
 class SemanticDomainClassifier:
     def __init__(self):
@@ -153,11 +258,19 @@ except Exception as e:
     semantic_classifier = None
 
 
+# ---------------------------------------------------------------------------
+# Main guardrail pipeline
+# ---------------------------------------------------------------------------
+
 def run_guardrails(raw_message: str, context: str = "") -> GuardrailResult:
-    safe_msg  = raw_message
+
+    # ── Step 0: Normalise ────────────────────────────────────────────────────
+    # Fix spelling and domain typos first so every downstream step works on
+    # clean text.  This single corrected string is used everywhere below.
+    safe_msg  = normalise_prompt(raw_message)
     pii_found = []
 
-    # 1. Emergency regex
+    # ── Step 1: Emergency regex ──────────────────────────────────────────────
     for pattern in EMERGENCY_PATTERNS:
         if re.search(pattern, safe_msg, re.IGNORECASE):
             return GuardrailResult(
@@ -166,13 +279,13 @@ def run_guardrails(raw_message: str, context: str = "") -> GuardrailResult:
                 response=EMERGENCY_RESPONSE,
             )
 
-    # 2. PII redaction
+    # ── Step 2: PII redaction ────────────────────────────────────────────────
     for pii_type, pattern in PII_PATTERNS.items():
         if re.findall(pattern, safe_msg):
             safe_msg = re.sub(pattern, f"[{pii_type}_REDACTED]", safe_msg)
             pii_found.append(pii_type)
 
-    # 3. Semantic domain classification
+    # ── Step 3: Semantic domain classification ───────────────────────────────
     if semantic_classifier is None:
         classification = {"is_allowed": True, "primary_domain": "fallback"}
     else:
@@ -186,31 +299,33 @@ def run_guardrails(raw_message: str, context: str = "") -> GuardrailResult:
 
             should_retry = is_pronoun
             if not should_retry:
-                vec_msg     = semantic_classifier.embeddings_model.embed_query(safe_msg)
-                vec_context = semantic_classifier.embeddings_model.embed_query(context)
+                vec_msg      = semantic_classifier.embeddings_model.embed_query(safe_msg)
+                vec_context  = semantic_classifier.embeddings_model.embed_query(context)
                 followup_sim = 1 - cosine(vec_msg, vec_context)
-                
-                # FIX 2: Raised threshold from 0.40 to 0.65 to account for "Vector Inflation" 
-                # caused by massive text blocks in the new conversational memory context!
+
+                # FIX 2: Raised threshold from 0.40 to 0.65 to account for
+                # "Vector Inflation" caused by massive text blocks in the new
+                # conversational memory context.
                 should_retry = followup_sim > 0.65
 
             if should_retry:
                 logger.debug(
                     "[Guardrail] Retrying with context (pronoun=%s)", is_pronoun
                 )
-                context_class = semantic_classifier.classify(f"{context}. {safe_msg}")
+                context_class = semantic_classifier.classify(
+                    f"{context}. {safe_msg}"
+                )
                 if context_class["is_allowed"]:
                     classification = context_class
 
-    # 4. Route on final result
-# 4. Route on final result
+    # ── Step 4: Route on final classification result ─────────────────────────
     if not classification["is_allowed"]:
         return GuardrailResult(
             action=GuardrailAction.BLOCK_OOB,
             safe_message=safe_msg,
             response=DOMAIN_REJECTION_RESPONSE,
             classifier_score=classification,
-            pii_found=pii_found  # <-- FIX: Tell the OOB block to report the PII!
+            pii_found=pii_found,  # FIX: report PII even on OOB blocks
         )
 
     if classification["primary_domain"] == "emergency":

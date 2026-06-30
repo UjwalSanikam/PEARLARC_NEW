@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import "./App.css";
 import {
   Shield,
   Send,
@@ -9,11 +10,11 @@ import {
   WifiOff,
   FileText,
   Lock,
+  Menu,
 } from "lucide-react";
 
-import "./App.css";
-
-const API_BASE = "http://172.29.222.183:8000/api";
+// Update this to your actual backend IP if needed (e.g., "http://192.168.1.73:8000/api")
+const API_BASE = "http://127.0.0.1:8000/api";
 
 const INITIAL_MESSAGES = [
   {
@@ -37,23 +38,15 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const scrollRef = useRef(null);
-  // FIX 1: One ref for the sidebar upload, one for the inline input-bar upload.
-  //        Previously both inputs shared one ref, so only the last-rendered
-  //        one was reachable and the sidebar button silently did nothing.
   const sidebarUploadRef = useRef(null);
   const inlineUploadRef = useRef(null);
 
-  // FIX 2: Removed "locked" from the online pattern — a locked system is not
-  //        online.  "active" and "ready" are sufficient positive signals.
   const isOnline = /online|ready|active|ok/i.test(status);
 
   /* ----------------------------- */
-  /* FETCH SIDEBAR                 */
+  /* FETCH SESSIONS & STATUS       */
   /* ----------------------------- */
 
-  // FIX 3: Defined fetchSessions with useCallback *before* the useEffect that
-  //        calls it.  Avoids a temporal dependency on declaration order and
-  //        lets us safely include it in the effect dependency array.
   const fetchSessions = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/chats`);
@@ -63,10 +56,6 @@ export default function App() {
       console.error("Failed to fetch sessions:", err);
     }
   }, []);
-
-  /* ----------------------------- */
-  /* BACKEND STATUS                */
-  /* ----------------------------- */
 
   useEffect(() => {
     const checkStatus = async () => {
@@ -161,7 +150,6 @@ export default function App() {
       alert("Unable to connect to upload server.");
     } finally {
       setIsLoading(false);
-      // Reset so the same file can be re-uploaded if needed
       event.target.value = "";
     }
   };
@@ -222,102 +210,126 @@ export default function App() {
 
   return (
     <div className="app-container">
+      <header className="top-header" style={{ position: 'relative', zIndex: 100 }}>
+        {/* Wrapping the button and sidebar to act as a relative anchor for the dropdown */}
+        <div style={{ position: 'relative', display: 'inline-block' }}>
+          <button
+            className="dashboard-btn"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              background: 'transparent',
+              border: 'none',
+              color: 'white',
+              cursor: 'pointer',
+              fontSize: '1.1rem',
+              fontWeight: '600',
+              padding: '10px'
+            }}
+          >
+            <Menu size={24} />
+            Dashboard
+          </button>
 
-      <header className="top-header">
-        <button
-          className="dashboard-btn"
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-        >
-          ☰ Dashboard
-        </button>
+          {/* ---------------- Dropdown Sidebar ---------------- */}
+          {sidebarOpen && (
+            <aside
+              className="sidebar"
+              style={{
+                position: 'absolute',
+                top: '100%',
+                left: '10px',
+                marginTop: '8px',
+                height: 'auto',
+                minHeight: '400px',
+                maxHeight: '80vh',
+                borderRadius: '12px',
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
+                zIndex: 9999,
+                display: 'flex',
+                flexDirection: 'column'
+              }}
+            >
+              {/* Added flex column layout here to force vertical stacking */}
+              <div className="sidebar-header" style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '15px' }}>
+
+                <button
+                  className="new-chat-btn"
+                  onClick={() => sidebarUploadRef.current.click()}
+                  disabled={isLoading}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                >
+                  <FileText size={16} />
+                  Upload PDF
+                </button>
+
+                <input
+                  type="file"
+                  accept="application/pdf"
+                  ref={sidebarUploadRef}
+                  style={{ display: "none" }}
+                  onChange={handleUpload}
+                />
+
+                <button
+                  className="new-chat-btn"
+                  onClick={createNewChat}
+                  disabled={isLoading}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                >
+                  <Plus size={16} />
+                  New Chat
+                </button>
+              </div>
+
+              <div className="session-list">
+                <div className="session-label">Recent Chats</div>
+
+                {sessions.length === 0 && (
+                  <div className="empty-session">No previous chats</div>
+                )}
+
+                {sessions.map((session) => (
+                  <button
+                    key={session.id}
+                    className={`session-item ${activeId === session.id ? "active" : ""
+                      }`}
+                    onClick={() => setActiveId(session.id)}
+                  >
+                    <MessageSquare size={15} />
+                    <span className="session-title">{session.title}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="sidebar-footer">
+                <div className="brand">
+                  <Shield size={20} />
+                  <div>
+                    <div className="brand-title">CyberGuard AI</div>
+                    <div className="brand-subtitle">Secure Assistant</div>
+                  </div>
+                </div>
+
+                <div
+                  className={`status-indicator ${isOnline ? "online" : "offline"
+                    }`}
+                >
+                  {isOnline ? <Wifi size={18} /> : <WifiOff size={18} />}
+                </div>
+              </div>
+            </aside>
+          )}
+        </div>
       </header>
 
-      {/* ---------------- Sidebar ---------------- */}
-      {sidebarOpen && (
-        <aside className="sidebar">
-
-          <div className="sidebar-header">
-
-            {/* FIX 4: Sidebar uses its own ref so it stays independent of the
-                       inline upload button in the input bar. */}
-            <button
-              className="new-chat-btn"
-              onClick={() => sidebarUploadRef.current.click()}
-              disabled={isLoading}
-            >
-              <FileText size={16} />
-              Upload PDF
-            </button>
-
-            <input
-              type="file"
-              accept="application/pdf"
-              ref={sidebarUploadRef}
-              style={{ display: "none" }}
-              onChange={handleUpload}
-            />
-
-            <button
-              className="new-chat-btn"
-              onClick={createNewChat}
-              disabled={isLoading}
-            >
-              <Plus size={16} />
-              New Chat
-            </button>
-
-          </div>
-
-          <div className="session-list">
-
-            <div className="session-label">Recent Chats</div>
-
-            {sessions.length === 0 && (
-              <div className="empty-session">No previous chats</div>
-            )}
-
-            {sessions.map((session) => (
-              <button
-                key={session.id}
-                className={`session-item ${activeId === session.id ? "active" : ""}`}
-                onClick={() => setActiveId(session.id)}
-              >
-                <MessageSquare size={15} />
-                <span className="session-title">{session.title}</span>
-              </button>
-            ))}
-
-          </div>
-
-          <div className="sidebar-footer">
-
-            <div className="brand">
-              <Shield size={20} />
-              <div>
-                <div className="brand-title">CyberGuard AI</div>
-                <div className="brand-subtitle">Secure Assistant</div>
-              </div>
-            </div>
-
-            <div className={`status-indicator ${isOnline ? "online" : "offline"}`}>
-              {isOnline ? <Wifi size={18} /> : <WifiOff size={18} />}
-            </div>
-
-          </div>
-
-        </aside>
-      )}
-
-      {/* FIX 5: Removed the duplicate self-closing <main className="chat-area" />
-                 that was rendering an empty ghost element before the real main.
-                 There is now exactly one <main> tag. */}
-      <main className={`chat-area ${sidebarOpen ? "" : "full"}`}>
-
+      {/* Changed to always be "full" so the chat doesn't squish when the dropdown opens */}
+      <main className="chat-area full">
         <div className="chat-scroll" ref={scrollRef}>
-
           {messages.map((msg, index) => (
             <div key={index} className={`row row-${msg.role}`}>
-
               {msg.role === "ai" && (
                 <div className="avatar">
                   <Shield size={16} />
@@ -331,53 +343,44 @@ export default function App() {
                 <div className="bubble-text">{msg.text}</div>
 
                 {/* ---------- Explainability ---------- */}
-                {msg.role === "ai" &&
-                  (msg.sources?.length > 0 || msg.scores) && (
-                    <details className="reasoning-panel">
+                {msg.role === "ai" && (msg.sources?.length > 0 || msg.scores) && (
+                  <details className="reasoning-panel">
+                    <summary>🔍 View AI Reasoning</summary>
 
-                      <summary>🔍 View AI Reasoning</summary>
+                    <div className="reasoning-body">
+                      {msg.scores && (
+                        <div className="routing-box">
+                          <strong>Primary Domain</strong>
+                          <div>{msg.scores.primary_domain}</div>
+                        </div>
+                      )}
 
-                      <div className="reasoning-body">
+                      {msg.sources?.length > 0 && (
+                        <div className="sources-box">
+                          <strong>Retrieved Sources</strong>
+                          <ul>
+                            {msg.sources.map((src, i) => (
+                              <li key={i}>
+                                <FileText size={12} />
+                                <div>
+                                  <strong>{src.source}</strong>
+                                  <p>{src.snippet}</p>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
 
-                        {msg.scores && (
-                          <div className="routing-box">
-                            <strong>Primary Domain</strong>
-                            <div>{msg.scores.primary_domain}</div>
-                          </div>
-                        )}
-
-                        {msg.sources?.length > 0 && (
-                          <div className="sources-box">
-                            <strong>Retrieved Sources</strong>
-                            <ul>
-                              {msg.sources.map((src, i) => (
-                                <li key={i}>
-                                  <FileText size={12} />
-                                  <div>
-                                    <strong>{src.source}</strong>
-                                    {/* FIX 6: Render snippet as a proper
-                                               string inside a <p> tag without
-                                               raw JSX quote-text nodes. */}
-                                    <p>{src.snippet}</p>
-                                  </div>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-
-                        {msg.pii && (
-                          <div className="pii-warning">
-                            <Lock size={14} />
-                            Sensitive information was automatically redacted.
-                          </div>
-                        )}
-
-                      </div>
-
-                    </details>
-                  )}
-
+                      {msg.pii && (
+                        <div className="pii-warning">
+                          <Lock size={14} />
+                          Sensitive information was automatically redacted.
+                        </div>
+                      )}
+                    </div>
+                  </details>
+                )}
               </div>
             </div>
           ))}
@@ -395,15 +398,11 @@ export default function App() {
               </div>
             </div>
           )}
-
         </div>
 
         {/* ================= INPUT AREA ================= */}
         <div className="input-container">
-
           <form className="input-bar" onSubmit={submit}>
-
-            {/* FIX 4 (continued): Inline upload uses its own separate ref. */}
             <input
               type="file"
               accept="application/pdf"
@@ -436,18 +435,14 @@ export default function App() {
             >
               <Send size={18} />
             </button>
-
           </form>
 
           <div className="disclaimer">
-            CyberGuard AI may generate incorrect or incomplete responses.
-            Always verify critical cybersecurity advice before taking action.
+            CyberGuard AI may generate incorrect or incomplete responses. Always
+            verify critical cybersecurity advice before taking action.
           </div>
-
         </div>
-
       </main>
-
     </div>
   );
 }

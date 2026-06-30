@@ -128,3 +128,24 @@ async def chat_with_ai(req: ChatRequest, db: Session = Depends(get_db)):
             sources=[],
             session_id=session_id
         )
+@app.post("/api/upload")
+async def upload_pdf(file: UploadFile = File(...)):
+    try:
+        # 1. Ensure the 'data' folder exists
+        os.makedirs("data", exist_ok=True)
+        
+        # 2. Save the uploaded file into the 'data' folder
+        file_path = os.path.join("data", file.filename)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        print(f"[DEBUG] Received and saved: {file.filename}")
+        
+        # 3. Trigger your FAISS database rebuild script
+        build_database()
+        
+        return {"message": "Knowledge base updated successfully."}
+        
+    except Exception as e:
+        print(f"[ERROR] Upload failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to process PDF.")
