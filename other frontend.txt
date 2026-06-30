@@ -11,11 +11,39 @@ const INITIAL_MESSAGES = [
   },
 ];
 
+// --- LOCAL STORAGE HELPERS ---
+// These functions run exactly once when the app loads to grab any saved chats
+const getInitialSessions = () => {
+  const saved = localStorage.getItem('cyberguard-sessions');
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch (e) {
+      console.error('Failed to parse sessions from local storage');
+    }
+  }
+  // If no saved chats exist, start a fresh one
+  return [{ id: Date.now(), title: 'New Conversation', messages: INITIAL_MESSAGES }];
+};
+
+const getInitialActiveId = (sessions) => {
+  const savedId = localStorage.getItem('cyberguard-activeId');
+  if (savedId) {
+    try {
+      const parsedId = JSON.parse(savedId);
+      // Ensure the ID we load actually exists in our sessions array
+      if (sessions.some(s => s.id === parsedId)) return parsedId;
+    } catch (e) {}
+  }
+  // Fallback to the first session's ID
+  return sessions[0].id;
+};
+
+
 export default function App() {
-  // --- DATABASE-BACKED STATE ---
-  const [sessions, setSessions] = useState([]); // Sidebar list from Postgres
-  const [activeId, setActiveId] = useState(null); // Currently selected database session ID
-  const [messages, setMessages] = useState(INITIAL_MESSAGES); // Active conversation
+  // --- SESSION MANAGEMENT STATE (Now powered by Local Storage!) ---
+  const [sessions, setSessions] = useState(getInitialSessions);
+  const [activeId, setActiveId] = useState(() => getInitialActiveId(sessions));
   
   // --- UI STATE ---
   const [input, setInput] = useState('');
@@ -23,73 +51,54 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const scrollRef = useRef(null);
 
+  const activeSession = sessions.find((s) => s.id === activeId) || sessions[0];
   const isOnline = /online|active|locked|ready|ok/i.test(status);
 
-  // --- API ROUTING ---
-  
-  // 1. Fetch backend status
+  // Auto-save Sessions to Local Storage whenever they change
   useEffect(() => {
-    fetch('http://192.168.1.73:8000/api/status')
+    localStorage.setItem('cyberguard-sessions', JSON.stringify(sessions));
+  }, [sessions]);
+
+  // Auto-save the Active Tab to Local Storage whenever you switch chats
+  useEffect(() => {
+    localStorage.setItem('cyberguard-activeId', JSON.stringify(activeId));
+  }, [activeId]);
+
+  // Check backend status on load
+  useEffect(() => {
+    fetch('http://127.0.0.1:8000/api/status')
       .then((res) => res.json())
       .then((data) => setStatus(data.message))
       .catch(() => setStatus('Backend disconnected.'));
   }, []);
-
-  // 2. Fetch all chat sessions for the sidebar
-  const fetchSessions = async () => {
-    try {
-      const res = await fetch('http://192.168.1.73:8000/api/chats');
-      const data = await res.json();
-      setSessions(data);
-    } catch (err) {
-      console.error("Failed to fetch sidebar sessions from database:", err);
-    }
-  };
-
-  // Run once on load
-  useEffect(() => {
-    fetchSessions();
-  }, []);
-
-  // 3. Fetch specific chat history when activeId changes
-  useEffect(() => {
-    if (!activeId) {
-      // If activeId is null, it means we clicked "New Chat"
-      setMessages(INITIAL_MESSAGES);
-      return;
-    }
-
-    const fetchHistory = async () => {
-      try {
-        const res = await fetch(`http://192.168.1.73:8000/api/chats/${activeId}`);
-        const data = await res.json();
-        // Map database format to our UI format
-        const formattedMessages = data.map(m => ({
-          role: m.role,
-          text: m.content,
-          action: 'history' 
-        }));
-        setMessages(formattedMessages);
-      } catch (err) {
-        console.error("Failed to load conversation history:", err);
-      }
-    };
-
-    fetchHistory();
-  }, [activeId]);
 
   // Auto-scroll to bottom of chat
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
     }
-  }, [messages, isLoading]);
-
+  }, [activeSession.messages, isLoading]);
 
   // --- ACTIONS ---
   const createNewChat = () => {
-    setActiveId(null);
-    setMessages(INITIAL_MESSAGES);
+    const newSession = { id: Date.now(), title: 'New Conversation', messages: INITIAL_MESSAGES };
+    setSessions([newSession, ...sessions]);
+    setActiveId(newSession.id);
+  };
+
+  const updateActiveSession = (newMessages, newTitle = null) => {
+    setSessions((prev) =>
+      prev.map((session) => {
+        if (session.id === activeId) {
+          return {
+            ...session,
+            messages: newMessages,
+            title: newTitle || session.title,
+          };
+        }
+        return session;
+      })
+    );
   };
 
   const submit = async (e) => {
@@ -100,32 +109,38 @@ export default function App() {
     setInput('');
     setIsLoading(true);
 
-    // 1. Add user message to UI immediately for a snappy feel
-    const newMessages = [...messages, { role: 'user', text }];
-    setMessages(newMessages);
+    // 1. Add user message to UI immediately
+    const updatedMessages = [...activeSession.messages, { role: 'user', text }];
+    
+    // 2. Auto-generate title if this is the first user question
+    let newTitle = activeSession.title;
+    if (activeSession.messages.length === 1) {
+      newTitle = text.length > 28 ? text.substring(0, 28) + '...' : text;
+    }
+    
+    updateActiveSession(updatedMessages, newTitle);
+
+    // 3. Format history for the backend
+    const recentHistory = updatedMessages.slice(-5, -1).map(m => ({
+      role: m.role === 'ai' ? 'assistant' : 'user',
+      content: m.text
+    }));
 
     try {
-      // 2. Send payload directly to Postgres-backed endpoint
-      const response = await fetch('http://192.168.1.73:8000/api/chat', {
+      const response = await fetch('http://127.0.0.1:8000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           message: text,
-          session_id: activeId // Backend determines if it needs to make a new row
+          history: recentHistory 
         }),
       });
 
       const data = await response.json();
 
-      // 3. If this was a brand new chat, lock in the new Postgres ID
-      if (!activeId && data.session_id) {
-        setActiveId(data.session_id);
-        fetchSessions(); // Refresh the sidebar to show the newly created chat
-      }
-
       // 4. Append AI response
-      setMessages((prev) => [
-        ...prev,
+      updateActiveSession([
+        ...updatedMessages,
         {
           role: 'ai',
           text: data.reply || 'No response generated.',
@@ -137,8 +152,8 @@ export default function App() {
       ]);
     } catch (error) {
       console.error('Network Error:', error);
-      setMessages((prev) => [
-        ...prev,
+      updateActiveSession([
+        ...updatedMessages,
         { role: 'ai', text: 'Communication error with backend.', action: 'error' },
       ]);
     } finally {
@@ -189,7 +204,7 @@ export default function App() {
       {/* --- MAIN CHAT AREA --- */}
       <main className="chat-area">
         <div className="chat-scroll" ref={scrollRef}>
-          {messages.map((msg, idx) => (
+          {activeSession.messages.map((msg, idx) => (
             <div key={idx} className={`row row-${msg.role}`}>
               {msg.role === 'ai' && (
                 <div className="avatar">
