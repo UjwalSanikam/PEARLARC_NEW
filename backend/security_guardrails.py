@@ -1,4 +1,6 @@
 # backend/security_guardrails.py
+# backend/security_guardrails.py
+import os
 import re
 import difflib
 import logging
@@ -145,7 +147,10 @@ def normalise_prompt(raw_message: str) -> str:
 
 class SemanticDomainClassifier:
     def __init__(self):
-        self.embeddings_model = OllamaEmbeddings(model="nomic-embed-text")
+        self.embeddings_model = OllamaEmbeddings(
+            model="nomic-embed-text",
+            base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        )
         self.anchors = {
             "cybersecurity": [
                 "How do I secure my home wifi router?",
@@ -343,3 +348,29 @@ def run_guardrails(raw_message: str, context: str = "") -> GuardrailResult:
         pii_found=pii_found,
         classifier_score=classification,
     )
+
+def classify_document_domain(text: str) -> dict:
+    """
+    Classifies whether an uploaded document's content belongs to the
+    cybersecurity domain. Reuses the same embeddings/centroids as the
+    chat message classifier for consistency.
+    """
+    sample = text[:3000]  # keep the embedding input reasonable
+
+    if semantic_classifier is None:
+        # Fallback if embeddings model is unavailable: keyword density
+        lower = sample.lower()
+        hits = sum(1 for kw in CYBER_KEYWORDS if kw in lower)
+        return {
+            "is_cybersecurity": hits >= 3,
+            "method": "keyword_fallback",
+            "keyword_hits": hits,
+        }
+
+    result = semantic_classifier.classify(sample)
+    return {
+        "is_cybersecurity": result["primary_domain"] == "cybersecurity",
+        "cyber_similarity": result["cyber_similarity"],
+        "oob_similarity": result["oob_similarity"],
+        "method": "semantic",
+    }

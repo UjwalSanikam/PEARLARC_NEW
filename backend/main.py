@@ -5,7 +5,7 @@ from typing import List
 
 from schemas import ChatRequest, ChatResponse
 from security_guardrails import run_guardrails, GuardrailAction
-from memory import memory_manager
+from memory import memory_store   # replace the old `from memory import memory_manager`
 from rag_engine import generate_ai_response
 
 # --- NEW: Import Database Components ---
@@ -15,6 +15,14 @@ from fastapi import UploadFile, File
 import shutil
 import os
 from create_db import build_database
+
+from database import engine, Base, get_db, ChatSession, ChatMessage, User
+from auth import get_current_user
+
+from langchain_community.document_loaders import PyPDFLoader
+from security_guardrails import classify_document_domain
+from rag_engine import reload_vector_db
+
 
 # --- NEW: Generate Tables on Startup ---
 print("Generating database tables...")
@@ -32,6 +40,39 @@ app.add_middleware(
 
 print("Backend API Router successfully booted.")
 
+from auth import hash_password, verify_password, create_access_token, get_current_user
+from schemas_auth import UserCreate, UserLogin, TokenResponse
+from database import User
+
+@app.post("/api/auth/register", response_model=TokenResponse)
+def register(payload: UserCreate, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(User.email == payload.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered.")
+
+    user = User(email=payload.email, hashed_password=hash_password(payload.password))
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token(user.id)
+    return TokenResponse(access_token=token)
+
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+def login(payload: UserLogin, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email).first()
+    if not user or not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    token = create_access_token(user.id)
+    return TokenResponse(access_token=token)
+
+
+@app.get("/api/auth/me")
+def get_me(current_user: User = Depends(get_current_user)):
+    return {"id": current_user.id, "email": current_user.email}
+
 
 @app.get("/api/status")
 def status():
@@ -39,32 +80,52 @@ def status():
 
 # --- NEW ENDPOINT: Get all chat sessions for the frontend sidebar ---
 @app.get("/api/chats")
-def get_all_chats(db: Session = Depends(get_db)):
-    chats = db.query(ChatSession).order_by(ChatSession.created_at.desc()).all()
+def get_all_chats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    chats = (
+        db.query(ChatSession)
+        .filter(ChatSession.user_id == current_user.id)
+        .order_by(ChatSession.created_at.desc())
+        .all()
+    )
     return [{"id": chat.id, "title": chat.title, "created_at": chat.created_at} for chat in chats]
 
 # --- NEW ENDPOINT: Get the message history for a specific chat ---
 @app.get("/api/chats/{session_id}")
-def get_chat_history(session_id: str, db: Session = Depends(get_db)):
+def get_chat_history(session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    session = db.query(ChatSession).filter(
+        ChatSession.id == session_id,
+        ChatSession.user_id == current_user.id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+
     messages = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc()).all()
     return [{"role": msg.role, "content": msg.content} for msg in messages]
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat_with_ai(req: ChatRequest, db: Session = Depends(get_db)):
+async def chat_with_ai(req: ChatRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
-    # 1. Manage the Chat Session
     session_id = getattr(req, 'session_id', None)
-    
+
     if not session_id:
-        # If no session exists, create a new one in the database
-        new_session = ChatSession(title=req.message[:40] + "...") 
+        new_session = ChatSession(title=req.message[:40] + "...", user_id=current_user.id)
         db.add(new_session)
         db.commit()
         db.refresh(new_session)
         session_id = new_session.id
+    else:
+        # Make sure this session actually belongs to the caller
+        session = db.query(ChatSession).filter(
+            ChatSession.id == session_id,
+            ChatSession.user_id == current_user.id
+        ).first()
+        if not session:
+            raise HTTPException(status_code=404, detail="Chat session not found.")
+
+    # ... rest of the function stays exactly the same
 
     # 2. Save the User's Message to the Database
     user_msg = ChatMessage(session_id=session_id, role="user", content=req.message)
@@ -72,7 +133,7 @@ async def chat_with_ai(req: ChatRequest, db: Session = Depends(get_db)):
     db.commit()
 
     # 3. Run Guardrails
-    conversation_context = memory_manager.get_conversation_context()
+    conversation_context = memory_store.get(session_id).get_conversation_context()
     result = run_guardrails(req.message, context=conversation_context)
 
     if result.action in (GuardrailAction.EMERGENCY, GuardrailAction.BLOCK_OOB):
@@ -95,7 +156,7 @@ async def chat_with_ai(req: ChatRequest, db: Session = Depends(get_db)):
     # 4. Generate AI Response
     try:
         print("[DEBUG] Executing RAG Pipeline via rag_engine.py...")
-        ai_reply, source_docs = generate_ai_response(result.safe_message)
+        ai_reply, source_docs = generate_ai_response(result.safe_message, session_id)
         print(f"[DEBUG] Response generated with {len(source_docs)} citations.")
 
         # Save the AI's successful reply to the database
@@ -128,24 +189,62 @@ async def chat_with_ai(req: ChatRequest, db: Session = Depends(get_db)):
             sources=[],
             session_id=session_id
         )
+
 @app.post("/api/upload")
 async def upload_pdf(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+
+    os.makedirs("data", exist_ok=True)
+    os.makedirs("temp_uploads", exist_ok=True)
+    temp_path = os.path.join("temp_uploads", file.filename)
+
     try:
-        # 1. Ensure the 'data' folder exists
-        os.makedirs("data", exist_ok=True)
-        
-        # 2. Save the uploaded file into the 'data' folder
-        file_path = os.path.join("data", file.filename)
-        with open(file_path, "wb") as buffer:
+        with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-            
-        print(f"[DEBUG] Received and saved: {file.filename}")
-        
-        # 3. Trigger your FAISS database rebuild script
+
+        # 1. Extract text BEFORE accepting it into the knowledge base
+        try:
+            pages = PyPDFLoader(temp_path).load()
+        except Exception as e:
+            os.remove(temp_path)
+            raise HTTPException(status_code=400, detail=f"Could not read PDF: {str(e)}")
+
+        sample_text = " ".join(p.page_content for p in pages[:5])
+        if not sample_text.strip():
+            os.remove(temp_path)
+            raise HTTPException(
+                status_code=400,
+                detail="This PDF has no extractable text (it may be a scanned image)."
+            )
+
+        # 2. Check the domain
+        domain_result = classify_document_domain(sample_text)
+        print(f"[DEBUG] PDF domain classification: {domain_result}")
+
+        if not domain_result["is_cybersecurity"]:
+            os.remove(temp_path)
+            raise HTTPException(
+                status_code=400,
+                detail="This document doesn't appear to be cybersecurity-related. Please upload a relevant PDF."
+            )
+
+        # 3. Passed — move into the permanent knowledge base and rebuild the index
+        final_path = os.path.join("data", file.filename)
+        shutil.move(temp_path, final_path)
+
         build_database()
-        
-        return {"message": "Knowledge base updated successfully."}
-        
+        reload_vector_db()
+
+        return {
+            "message": f"'{file.filename}' passed the cybersecurity check and was added to the knowledge base.",
+            "domain_check": domain_result,
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
         print(f"[ERROR] Upload failed: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to process PDF.")
+        raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")

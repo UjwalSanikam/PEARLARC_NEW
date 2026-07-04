@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import "./App.css";
+import { useAuth } from "./AuthContext";
+import Login from "./Login"; // adjust path if your Login component lives elsewhere
 import {
   Shield,
   Send,
@@ -24,11 +26,14 @@ const INITIAL_MESSAGES = [
   },
 ];
 
-export default function App() {
-  /* ----------------------------- */
-  /* STATE                         */
-  /* ----------------------------- */
+function App() {
+  // --- Auth state (hook must always run, no early return before other hooks) ---
+  const { token, isAuthenticated, logout, isChecking } = useAuth();
 
+  /**
+   * All hooks are declared here, unconditionally, before any early return.
+   * This is required by React's Rules of Hooks.
+   */
   const [sessions, setSessions] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [messages, setMessages] = useState(INITIAL_MESSAGES);
@@ -48,19 +53,32 @@ export default function App() {
   /* ----------------------------- */
 
   const fetchSessions = useCallback(async () => {
+    if (!token) return;
     try {
-      const res = await fetch(`${API_BASE}/chats`);
+      const res = await fetch(`${API_BASE}/chats`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        console.error("Failed to fetch sessions: status", res.status);
+        setSessions([]);
+        return;
+      }
       const data = await res.json();
-      setSessions(data);
+      setSessions(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("Failed to fetch sessions:", err);
+      setSessions([]);
     }
-  }, []);
+  }, [token]);
 
   useEffect(() => {
+    if (!token) return;
+
     const checkStatus = async () => {
       try {
-        const res = await fetch(`${API_BASE}/status`);
+        const res = await fetch(`${API_BASE}/status`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
         const data = await res.json();
         setStatus(data.message);
       } catch {
@@ -70,7 +88,7 @@ export default function App() {
 
     checkStatus();
     fetchSessions();
-  }, [fetchSessions]);
+  }, [fetchSessions, token]);
 
   /* ----------------------------- */
   /* LOAD CHAT HISTORY             */
@@ -81,17 +99,22 @@ export default function App() {
       setMessages(INITIAL_MESSAGES);
       return;
     }
+    if (!token) return;
 
     const loadHistory = async () => {
       try {
-        const res = await fetch(`${API_BASE}/chats/${activeId}`);
+        const res = await fetch(`${API_BASE}/chats/${activeId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
         const data = await res.json();
 
-        const history = data.map((msg) => ({
-          role: msg.role,
-          text: msg.content,
-          action: "history",
-        }));
+        const history = Array.isArray(data)
+          ? data.map((msg) => ({
+            role: msg.role,
+            text: msg.content,
+            action: "history",
+          }))
+          : INITIAL_MESSAGES;
 
         setMessages(history);
       } catch (err) {
@@ -100,7 +123,7 @@ export default function App() {
     };
 
     loadHistory();
-  }, [activeId]);
+  }, [activeId, token]);
 
   /* ----------------------------- */
   /* AUTO SCROLL                   */
@@ -138,6 +161,7 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/upload`, {
         method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
         body: form,
       });
 
@@ -172,7 +196,10 @@ export default function App() {
     try {
       const response = await fetch(`${API_BASE}/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ message: text, session_id: activeId }),
       });
 
@@ -205,129 +232,171 @@ export default function App() {
   };
 
   /* ----------------------------- */
+  /* AUTH GATE (after all hooks)   */
+  /* ----------------------------- */
+
+  if (isChecking) return <div>Loading...</div>;
+  if (!isAuthenticated) return <Login />;
+
+  /* ----------------------------- */
   /* RENDER                        */
   /* ----------------------------- */
 
   return (
-    <div className="app-container">
-      <header className="top-header" style={{ position: 'relative', zIndex: 100 }}>
-        {/* Wrapping the button and sidebar to act as a relative anchor for the dropdown */}
-        <div style={{ position: 'relative', display: 'inline-block' }}>
+    <div
+      className="app-container"
+      style={{ display: "flex", flexDirection: "row", height: "100vh", overflow: "hidden" }}
+    >
+      {/* ---------------- Left rail: header + persistent sidebar ---------------- */}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          flexShrink: 0,
+        }}
+      >
+        <header
+          className="top-header"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            padding: "16px",
+          }}
+        >
           <button
             className="dashboard-btn"
             onClick={() => setSidebarOpen(!sidebarOpen)}
+            aria-label="Toggle dashboard menu"
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              background: 'transparent',
-              border: 'none',
-              color: 'white',
-              cursor: 'pointer',
-              fontSize: '1.1rem',
-              fontWeight: '600',
-              padding: '10px'
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+              background: "transparent",
+              border: "none",
+              color: "white",
+              cursor: "pointer",
+              padding: "6px",
+              fontSize: "1.2rem",
+              fontWeight: "700",
             }}
           >
             <Menu size={24} />
             Dashboard
           </button>
+        </header>
 
-          {/* ---------------- Dropdown Sidebar ---------------- */}
-          {sidebarOpen && (
-            <aside
-              className="sidebar"
-              style={{
-                position: 'absolute',
-                top: '100%',
-                left: '10px',
-                marginTop: '8px',
-                height: 'auto',
-                minHeight: '400px',
-                maxHeight: '80vh',
-                borderRadius: '12px',
-                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
-                zIndex: 9999,
-                display: 'flex',
-                flexDirection: 'column'
-              }}
+        {/* ---------------- Persistent Sidebar Panel ---------------- */}
+        {sidebarOpen && (
+          <aside
+            className="sidebar"
+            style={{
+              width: "320px",
+              margin: "0 16px 16px 16px",
+              borderRadius: "12px",
+              display: "flex",
+              flexDirection: "column",
+              overflowY: "auto",
+            }}
+          >
+            <div
+              className="sidebar-header"
+              style={{ display: "flex", flexDirection: "column", gap: "12px", padding: "15px" }}
             >
-              {/* Added flex column layout here to force vertical stacking */}
-              <div className="sidebar-header" style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '15px' }}>
+              <button
+                className="new-chat-btn"
+                onClick={() => sidebarUploadRef.current.click()}
+                disabled={isLoading}
+                style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}
+              >
+                <FileText size={16} />
+                Upload PDF
+              </button>
 
+              <input
+                type="file"
+                accept="application/pdf"
+                ref={sidebarUploadRef}
+                style={{ display: "none" }}
+                onChange={handleUpload}
+              />
+
+              <button
+                className="logout-btn"
+                onClick={logout}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px",
+                  color: "#f87171",
+                  background: "transparent",
+                  border: "1px solid #f87171",
+                  borderRadius: "8px",
+                  padding: "10px",
+                  cursor: "pointer",
+                }}
+              >
+                Log Out
+              </button>
+
+              <button
+                className="new-chat-btn"
+                onClick={createNewChat}
+                disabled={isLoading}
+                style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}
+              >
+                <Plus size={16} />
+                New Chat
+              </button>
+            </div>
+
+            <div className="session-list">
+              <div className="session-label">Recent Chats</div>
+
+              {sessions.length === 0 && (
+                <div className="empty-session">No previous chats</div>
+              )}
+
+              {sessions.map((session) => (
                 <button
-                  className="new-chat-btn"
-                  onClick={() => sidebarUploadRef.current.click()}
-                  disabled={isLoading}
-                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-                >
-                  <FileText size={16} />
-                  Upload PDF
-                </button>
-
-                <input
-                  type="file"
-                  accept="application/pdf"
-                  ref={sidebarUploadRef}
-                  style={{ display: "none" }}
-                  onChange={handleUpload}
-                />
-
-                <button
-                  className="new-chat-btn"
-                  onClick={createNewChat}
-                  disabled={isLoading}
-                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-                >
-                  <Plus size={16} />
-                  New Chat
-                </button>
-              </div>
-
-              <div className="session-list">
-                <div className="session-label">Recent Chats</div>
-
-                {sessions.length === 0 && (
-                  <div className="empty-session">No previous chats</div>
-                )}
-
-                {sessions.map((session) => (
-                  <button
-                    key={session.id}
-                    className={`session-item ${activeId === session.id ? "active" : ""
-                      }`}
-                    onClick={() => setActiveId(session.id)}
-                  >
-                    <MessageSquare size={15} />
-                    <span className="session-title">{session.title}</span>
-                  </button>
-                ))}
-              </div>
-
-              <div className="sidebar-footer">
-                <div className="brand">
-                  <Shield size={20} />
-                  <div>
-                    <div className="brand-title">CyberGuard AI</div>
-                    <div className="brand-subtitle">Secure Assistant</div>
-                  </div>
-                </div>
-
-                <div
-                  className={`status-indicator ${isOnline ? "online" : "offline"
+                  key={session.id}
+                  className={`session-item ${activeId === session.id ? "active" : ""
                     }`}
+                  onClick={() => setActiveId(session.id)}
                 >
-                  {isOnline ? <Wifi size={18} /> : <WifiOff size={18} />}
+                  <MessageSquare size={15} />
+                  <span className="session-title">{session.title}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="sidebar-footer">
+              <div className="brand">
+                <Shield size={20} />
+                <div>
+                  <div className="brand-title">CyberGuard AI</div>
+                  <div className="brand-subtitle">Secure Assistant</div>
                 </div>
               </div>
-            </aside>
-          )}
-        </div>
-      </header>
 
-      {/* Changed to always be "full" so the chat doesn't squish when the dropdown opens */}
-      <main className="chat-area full">
-        <div className="chat-scroll" ref={scrollRef}>
+              <div
+                className={`status-indicator ${isOnline ? "online" : "offline"
+                  }`}
+              >
+                {isOnline ? <Wifi size={18} /> : <WifiOff size={18} />}
+              </div>
+            </div>
+          </aside>
+        )}
+      </div>
+
+      {/* Chat area flexes to fill remaining width next to the sidebar */}
+      <main
+        className="chat-area full"
+        style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}
+      >
+        <div className="chat-scroll" ref={scrollRef} style={{ flex: 1, overflowY: "auto" }}>
           {messages.map((msg, index) => (
             <div key={index} className={`row row-${msg.role}`}>
               {msg.role === "ai" && (
@@ -400,7 +469,7 @@ export default function App() {
           )}
         </div>
 
-        {/* ================= INPUT AREA ================= */}
+        {/* ================= INPUT AREA (bottom, matching mockup) ================= */}
         <div className="input-container">
           <form className="input-bar" onSubmit={submit}>
             <input
@@ -446,3 +515,5 @@ export default function App() {
     </div>
   );
 }
+
+export default App;
