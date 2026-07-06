@@ -20,6 +20,7 @@ services:
       - "11434:11434"
     volumes:
       - ollama_models:/root/.ollama
+    entrypoint: [ "/bin/sh", "-c", "ollama serve & sleep 5 && ollama pull nomic-embed-text && ollama pull phi3 && wait" ]
 
   backend:
     build:

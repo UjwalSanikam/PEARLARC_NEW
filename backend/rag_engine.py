@@ -11,7 +11,7 @@ import os
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
 embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=OLLAMA_BASE_URL)
-llm = ChatOllama(model="llama3.2:1b", temperature=0, base_url=OLLAMA_BASE_URL)
+llm = ChatOllama(model="phi3", temperature=0, base_url=OLLAMA_BASE_URL)
 
 edu_prompt = """You are CyberGuard, an expert cybersecurity assistant. 
 You MUST answer the question factually. NEVER refuse to answer.
