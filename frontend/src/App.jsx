@@ -13,6 +13,7 @@ import {
   FileText,
   Lock,
   Menu,
+  LogOut,
 } from "lucide-react";
 
 // Update this to your actual backend IP if needed (e.g., "http://192.168.1.73:8000/api")
@@ -46,7 +47,7 @@ function App() {
   const sidebarUploadRef = useRef(null);
   const inlineUploadRef = useRef(null);
 
-  const isOnline = /online|ready|active|ok/i.test(status);
+  const [isOnline, setIsOnline] = useState(false);
 
   /* ----------------------------- */
   /* FETCH SESSIONS & STATUS       */
@@ -81,8 +82,10 @@ function App() {
         });
         const data = await res.json();
         setStatus(data.message);
+        setIsOnline(res.ok);
       } catch {
         setStatus("Backend disconnected.");
+        setIsOnline(false);
       }
     };
 
@@ -165,13 +168,28 @@ function App() {
         body: form,
       });
 
+      const data = await res.json();
+
       if (!res.ok) {
-        alert("Upload failed.");
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "ai",
+            text: data.detail || "PDF upload failed. Please try a different file.",
+            action: "error",
+          },
+        ]);
       } else {
-        alert("Knowledge base updated successfully.");
+        setMessages((prev) => [
+          ...prev,
+          { role: "ai", text: data.message || "PDF uploaded successfully.", action: "upload_success" },
+        ]);
       }
     } catch {
-      alert("Unable to connect to upload server.");
+      setMessages((prev) => [
+        ...prev,
+        { role: "ai", text: "Unable to connect to the upload server.", action: "error" },
+      ]);
     } finally {
       setIsLoading(false);
       event.target.value = "";
@@ -253,6 +271,7 @@ function App() {
           display: "flex",
           flexDirection: "column",
           flexShrink: 0,
+          height: "100vh",
         }}
       >
         <header
@@ -291,11 +310,13 @@ function App() {
             className="sidebar"
             style={{
               width: "320px",
-              margin: "0 16px 16px 16px",
-              borderRadius: "12px",
+              margin: 0,
+              borderRadius: 0,
               display: "flex",
               flexDirection: "column",
               overflowY: "auto",
+              flex: 1,
+              minHeight: 0,
             }}
           >
             <div
@@ -319,26 +340,6 @@ function App() {
                 style={{ display: "none" }}
                 onChange={handleUpload}
               />
-
-              <button
-                className="logout-btn"
-                onClick={logout}
-                style={{
-                  width: "100%",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "8px",
-                  color: "#f87171",
-                  background: "transparent",
-                  border: "1px solid #f87171",
-                  borderRadius: "8px",
-                  padding: "10px",
-                  cursor: "pointer",
-                }}
-              >
-                Log Out
-              </button>
 
               <button
                 className="new-chat-btn"
@@ -386,6 +387,17 @@ function App() {
               >
                 {isOnline ? <Wifi size={18} /> : <WifiOff size={18} />}
               </div>
+            </div>
+
+            <div className="sidebar-bottom-bar">
+              <button
+                className="footer-logout-btn"
+                onClick={logout}
+                aria-label="Log out"
+              >
+                <LogOut size={16} />
+                Log Out
+              </button>
             </div>
           </aside>
         )}
