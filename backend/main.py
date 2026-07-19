@@ -3,6 +3,11 @@ from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 
+import base64
+from rag_engine import generate_ai_response_with_image
+from fastapi import Form
+from fastapi.staticfiles import StaticFiles
+
 from schemas import ChatRequest, ChatResponse
 from security_guardrails import run_guardrails, GuardrailAction
 from memory import memory_store   # replace the old `from memory import memory_manager`
@@ -38,6 +43,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+os.makedirs("data/chat_images", exist_ok=True)
+app.mount("/images", StaticFiles(directory="data/chat_images"), name="chat_images")
+
 print("Backend API Router successfully booted.")
 
 from auth import hash_password, verify_password, create_access_token, get_current_user
@@ -67,6 +75,8 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
 
     token = create_access_token(user.id)
     return TokenResponse(access_token=token)
+
+
 
 
 @app.get("/api/auth/me")
@@ -100,7 +110,14 @@ def get_chat_history(session_id: str, db: Session = Depends(get_db), current_use
         raise HTTPException(status_code=404, detail="Chat session not found.")
 
     messages = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc()).all()
-    return [{"role": msg.role, "content": msg.content} for msg in messages]
+    return [
+        {
+            "role": msg.role,
+            "content": msg.content,
+            "image_url": f"/images/{os.path.basename(msg.image_path)}" if msg.image_path else None,
+        }
+        for msg in messages
+    ]
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -188,6 +205,90 @@ async def chat_with_ai(req: ChatRequest, db: Session = Depends(get_db), current_
             domain_scores=result.classifier_score,
             sources=[],
             session_id=session_id
+        )
+
+@app.post("/api/chat/image", response_model=ChatResponse)
+async def chat_with_image(
+    message: str = Form(""),
+    session_id: str = Form(None),
+    image: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    allowed_types = {"image/png", "image/jpeg", "image/webp"}
+    if image.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Only PNG, JPEG, or WEBP images are supported.")
+
+    contents = await image.read()
+    max_size = 10 * 1024 * 1024  # 10MB
+    if len(contents) > max_size:
+        raise HTTPException(status_code=400, detail="Image too large (max 10MB).")
+
+    # 1. Resolve or create the chat session (same pattern as /api/chat)
+    if not session_id:
+        title = message[:40] + "..." if message.strip() else "Image analysis"
+        new_session = ChatSession(title=title, user_id=current_user.id)
+        db.add(new_session)
+        db.commit()
+        db.refresh(new_session)
+        session_id = new_session.id
+    else:
+        session = db.query(ChatSession).filter(
+            ChatSession.id == session_id,
+            ChatSession.user_id == current_user.id
+        ).first()
+        if not session:
+            raise HTTPException(status_code=404, detail="Chat session not found.")
+
+    # 2. Save the image to disk
+    os.makedirs("data/chat_images", exist_ok=True)
+    safe_filename = f"{session_id}_{image.filename}"
+    saved_path = os.path.join("data/chat_images", safe_filename)
+    with open(saved_path, "wb") as f:
+        f.write(contents)
+
+    # 3. Save the user's message (with image_path) to the database
+    user_msg = ChatMessage(
+        session_id=session_id,
+        role="user",
+        content=message if message.strip() else "[Image uploaded]",
+        image_path=saved_path,
+    )
+    db.add(user_msg)
+    db.commit()
+
+    # 4. Run the vision model
+    try:
+        b64_image = base64.b64encode(contents).decode()
+        ai_reply, sources = generate_ai_response_with_image(b64_image, message, session_id)
+
+        ai_msg = ChatMessage(session_id=session_id, role="ai", content=ai_reply)
+        db.add(ai_msg)
+        db.commit()
+
+        return ChatResponse(
+            reply=ai_reply,
+            action="allow",
+            pii_redacted=[],
+            domain_scores={},
+            sources=sources,
+            session_id=session_id,
+        )
+    except Exception as e:
+        print(f"[DEBUG] Image pipeline crash: {str(e)}")
+        error_text = f"Error analyzing image: {str(e)}"
+
+        ai_msg = ChatMessage(session_id=session_id, role="ai", content=error_text)
+        db.add(ai_msg)
+        db.commit()
+
+        return ChatResponse(
+            reply=error_text,
+            action="error",
+            pii_redacted=[],
+            domain_scores={},
+            sources=[],
+            session_id=session_id,
         )
 
 @app.post("/api/upload")

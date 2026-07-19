@@ -14,11 +14,13 @@ import {
   Lock,
   Menu,
   LogOut,
+  ImageIcon,
+  X,
 } from "lucide-react";
 
 // Update this to your actual backend IP if needed (e.g., "http://192.168.1.73:8000/api")
 const API_BASE = "http://127.0.0.1:8000/api";
-
+const IMAGE_BASE = API_BASE.replace("/api", "");
 const INITIAL_MESSAGES = [
   {
     role: "ai",
@@ -48,6 +50,10 @@ function App() {
   const inlineUploadRef = useRef(null);
 
   const [isOnline, setIsOnline] = useState(false);
+
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const inlineImageUploadRef = useRef(null);
 
   /* ----------------------------- */
   /* FETCH SESSIONS & STATUS       */
@@ -116,6 +122,7 @@ function App() {
             role: msg.role,
             text: msg.content,
             action: "history",
+            image: msg.image_url ? `${IMAGE_BASE}${msg.image_url}` : null,
           }))
           : INITIAL_MESSAGES;
 
@@ -195,6 +202,23 @@ function App() {
       event.target.value = "";
     }
   };
+  /* ----------------------------- */
+  /* IMAGE SELECT (chat analysis)  */
+  /* ----------------------------- */
+
+  const handleImageSelect = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    setSelectedImage(file);
+    setImagePreview(URL.createObjectURL(file));
+    event.target.value = "";
+  };
+
+  const clearSelectedImage = () => {
+    setSelectedImage(null);
+    setImagePreview(null);
+  };
 
   /* ----------------------------- */
   /* SEND MESSAGE                  */
@@ -204,11 +228,61 @@ function App() {
     e.preventDefault();
 
     const text = input.trim();
-    if (!text || isLoading) return;
+    if ((!text && !selectedImage) || isLoading) return;
 
     setInput("");
     setIsLoading(true);
 
+    if (selectedImage) {
+      // Show the user's message with the local preview immediately
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", text: text || "[Image uploaded]", image: imagePreview },
+      ]);
+
+      const form = new FormData();
+      form.append("image", selectedImage);
+      form.append("message", text);
+      if (activeId) form.append("session_id", activeId);
+
+      const imageToClear = selectedImage;
+      clearSelectedImage();
+
+      try {
+        const response = await fetch(`${API_BASE}/chat/image`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: form,
+        });
+
+        const data = await response.json();
+
+        if (!activeId && data.session_id) {
+          setActiveId(data.session_id);
+          fetchSessions();
+        }
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "ai",
+            text: data.reply || "No response generated.",
+            action: data.action,
+            sources: data.sources || [],
+          },
+        ]);
+      } catch {
+        setMessages((prev) => [
+          ...prev,
+          { role: "ai", text: "Communication error.", action: "error" },
+        ]);
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    // --- existing text-only path, unchanged ---
     setMessages((prev) => [...prev, { role: "user", text }]);
 
     try {
@@ -421,6 +495,13 @@ function App() {
                 className={`bubble bubble-${msg.role} ${msg.action === "error" ? "error" : ""
                   }`}
               >
+                {msg.image && (
+                  <img
+                    src={msg.image}
+                    alt="Uploaded"
+                    style={{ maxWidth: "260px", borderRadius: "8px", marginBottom: "8px", display: "block" }}
+                  />
+                )}
                 <div className="bubble-text">{msg.text}</div>
 
                 {/* ---------- Explainability ---------- */}
@@ -483,6 +564,23 @@ function App() {
 
         {/* ================= INPUT AREA (bottom, matching mockup) ================= */}
         <div className="input-container">
+          {imagePreview && (
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 16px" }}>
+              <img
+                src={imagePreview}
+                alt="Selected"
+                style={{ width: "48px", height: "48px", objectFit: "cover", borderRadius: "6px" }}
+              />
+              <span style={{ fontSize: "0.85rem", opacity: 0.8 }}>{selectedImage?.name}</span>
+              <button
+                type="button"
+                onClick={clearSelectedImage}
+                style={{ background: "transparent", border: "none", cursor: "pointer", color: "white" }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+          )}
           <form className="input-bar" onSubmit={submit}>
             <input
               type="file"
@@ -499,6 +597,23 @@ function App() {
               disabled={isLoading}
             >
               <Plus size={18} />
+            </button>
+            <input
+              type="file"
+              accept="image/png, image/jpeg, image/webp"
+              ref={inlineImageUploadRef}
+              style={{ display: "none" }}
+              onChange={handleImageSelect}
+            />
+
+            <button
+              type="button"
+              className="inline-plus-btn"
+              onClick={() => inlineImageUploadRef.current.click()}
+              disabled={isLoading}
+              title="Upload image for analysis"
+            >
+              <ImageIcon size={18} />
             </button>
 
             <input

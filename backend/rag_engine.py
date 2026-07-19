@@ -12,6 +12,7 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
 embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=OLLAMA_BASE_URL)
 llm = ChatOllama(model="phi3", temperature=0, base_url=OLLAMA_BASE_URL)
+vision_llm = ChatOllama(model="llava:7b", temperature=0, base_url=OLLAMA_BASE_URL)
 
 edu_prompt = """You are CyberGuard, an expert cybersecurity assistant. 
 You MUST answer the question factually. NEVER refuse to answer.
@@ -101,3 +102,29 @@ def generate_ai_response(safe_message: str, session_id: str) -> tuple[str, list[
 
     session_memory.add_turn(safe_message, ai_reply)
     return ai_reply, formatted_sources
+
+from langchain_core.messages import HumanMessage
+
+def generate_ai_response_with_image(b64_image: str, message: str, session_id: str) -> tuple[str, list[dict]]:
+    """
+    Analyzes an uploaded image directly with the vision model.
+    Bypasses FAISS retrieval since the image itself is the primary context.
+    """
+    session_memory = memory_store.get(session_id)
+
+    prompt_text = message.strip() if message and message.strip() else \
+        "Analyze this image from a cybersecurity perspective. Describe what you see and flag anything that looks like a security concern (phishing, suspicious UI, error messages, exposed credentials, malware indicators, etc.)."
+
+    vision_msg = HumanMessage(content=[
+        {"type": "text", "text": prompt_text},
+        {"type": "image_url", "image_url": f"data:image/png;base64,{b64_image}"},
+    ])
+
+    print("[DEBUG] Sending image to llava:7b for analysis...")
+    result = vision_llm.invoke([vision_msg])
+    ai_reply = result.content
+
+    session_memory.add_turn(f"[image uploaded] {prompt_text}", ai_reply)
+
+    # No FAISS sources for image analysis — empty list keeps ChatResponse shape consistent
+    return ai_reply, []
