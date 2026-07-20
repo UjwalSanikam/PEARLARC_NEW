@@ -105,6 +105,25 @@ def generate_ai_response(safe_message: str, session_id: str) -> tuple[str, list[
 
 from langchain_core.messages import HumanMessage
 
+def caption_image(b64_image: str) -> str:
+    """
+    Produces a short, factual, neutral description of an image.
+    Used only for guardrail screening — NOT shown to the user.
+    Kept separate from the full analysis prompt so the caption stays
+    unbiased by cybersecurity framing, giving the classifier a fair read.
+    """
+    caption_prompt = (
+        "Describe this image factually in 1-2 sentences. "
+        "State only what is visibly present — text, UI elements, objects, people. "
+        "Do not speculate or interpret intent."
+    )
+    caption_msg = HumanMessage(content=[
+        {"type": "text", "text": caption_prompt},
+        {"type": "image_url", "image_url": f"data:image/png;base64,{b64_image}"},
+    ])
+    result = vision_llm.invoke([caption_msg])
+    return result.content
+
 def generate_ai_response_with_image(b64_image: str, message: str, session_id: str) -> tuple[str, list[dict]]:
     """
     Analyzes an uploaded image directly with the vision model.

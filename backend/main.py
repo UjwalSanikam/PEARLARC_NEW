@@ -28,6 +28,8 @@ from langchain_community.document_loaders import PyPDFLoader
 from security_guardrails import classify_document_domain
 from rag_engine import reload_vector_db
 
+from rag_engine import caption_image
+
 
 # --- NEW: Generate Tables on Startup ---
 print("Generating database tables...")
@@ -247,7 +249,7 @@ async def chat_with_image(
     with open(saved_path, "wb") as f:
         f.write(contents)
 
-    # 3. Save the user's message (with image_path) to the database
+    ## 3. Save the user's message (with image_path) to the database
     user_msg = ChatMessage(
         session_id=session_id,
         role="user",
@@ -257,9 +259,43 @@ async def chat_with_image(
     db.add(user_msg)
     db.commit()
 
-    # 4. Run the vision model
+    b64_image = base64.b64encode(contents).decode()
+
+    # 4. Guardrail check — caption the image, then run it through the
+    #    same emergency/PII/domain pipeline used for text messages
     try:
-        b64_image = base64.b64encode(contents).decode()
+        caption = caption_image(b64_image)
+        print(f"[DEBUG] Image caption for guardrails: {caption}")
+    except Exception as e:
+        print(f"[DEBUG] Captioning failed, blocking image as a precaution: {str(e)}")
+        error_text = "Could not safely process this image. Please try again."
+        ai_msg = ChatMessage(session_id=session_id, role="ai", content=error_text)
+        db.add(ai_msg)
+        db.commit()
+        return ChatResponse(
+            reply=error_text, action="error", pii_redacted=[], domain_scores={},
+            sources=[], session_id=session_id,
+        )
+
+    conversation_context = memory_store.get(session_id).get_conversation_context()
+    guard_result = run_guardrails(caption, context=conversation_context)
+
+    if guard_result.action in (GuardrailAction.EMERGENCY, GuardrailAction.BLOCK_OOB):
+        print(f"[DEBUG] Image request HALTED by guardrails: {guard_result.action}")
+        ai_msg = ChatMessage(session_id=session_id, role="ai", content=guard_result.response)
+        db.add(ai_msg)
+        db.commit()
+        return ChatResponse(
+            reply=guard_result.response,
+            action=guard_result.action.value,
+            pii_redacted=guard_result.pii_found,
+            domain_scores=guard_result.classifier_score,
+            sources=[],
+            session_id=session_id,
+        )
+
+    # 5. Passed guardrails — run the full vision analysis
+    try:
         ai_reply, sources = generate_ai_response_with_image(b64_image, message, session_id)
 
         ai_msg = ChatMessage(session_id=session_id, role="ai", content=ai_reply)
