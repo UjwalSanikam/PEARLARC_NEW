@@ -19,7 +19,7 @@ from database import engine, Base, get_db, ChatSession, ChatMessage
 from fastapi import UploadFile, File
 import shutil
 import os
-from create_db import build_database
+from create_db import build_database, add_pdf_to_index, add_image_to_index
 
 from database import engine, Base, get_db, ChatSession, ChatMessage, User
 from auth import get_current_user
@@ -29,7 +29,8 @@ from security_guardrails import classify_document_domain
 from rag_engine import reload_vector_db
 
 from rag_engine import caption_image
-
+from database import KnowledgeImage
+from rag_engine import describe_image_for_kb
 
 # --- NEW: Generate Tables on Startup ---
 print("Generating database tables...")
@@ -370,7 +371,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         final_path = os.path.join("data", file.filename)
         shutil.move(temp_path, final_path)
 
-        build_database()
+        add_pdf_to_index(final_path)
         reload_vector_db()
 
         return {
@@ -385,3 +386,63 @@ async def upload_pdf(file: UploadFile = File(...)):
             os.remove(temp_path)
         print(f"[ERROR] Upload failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")
+    
+@app.post("/api/upload/image")
+async def upload_kb_image(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    allowed_types = {"image/png", "image/jpeg", "image/webp"}
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Only PNG, JPEG, or WEBP images are supported.")
+
+    contents = await file.read()
+    max_size = 10 * 1024 * 1024
+    if len(contents) > max_size:
+        raise HTTPException(status_code=400, detail="Image too large (max 10MB).")
+
+    b64_image = base64.b64encode(contents).decode()
+
+    # 1. Guardrail check — same caption -> classify pipeline as chat images
+    try:
+        caption = caption_image(b64_image)
+        print(f"[DEBUG] KB image caption for guardrails: {caption}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not process image: {str(e)}")
+
+    guard_result = run_guardrails(caption)
+    if guard_result.action in (GuardrailAction.EMERGENCY, GuardrailAction.BLOCK_OOB):
+        raise HTTPException(
+            status_code=400,
+            detail="This image doesn't appear to be cybersecurity-related. Please upload a relevant image."
+        )
+
+    # 2. Generate the richer description used for embedding/retrieval
+    description = describe_image_for_kb(b64_image)
+    print(f"[DEBUG] KB image description: {description}")
+
+    # 3. Save the file to disk
+    os.makedirs("data/images", exist_ok=True)
+    final_path = os.path.join("data/images", file.filename)
+    with open(final_path, "wb") as f:
+        f.write(contents)
+
+    # 4. Record it in the database
+    kb_image = KnowledgeImage(
+        filename=file.filename,
+        file_path=final_path,
+        description=description,
+        uploaded_by=current_user.id,
+    )
+    db.add(kb_image)
+    db.commit()
+
+    # 5. Add to the FAISS index incrementally — no full rebuild needed
+    add_image_to_index(description, file.filename, final_path)
+    reload_vector_db()
+
+    return {
+        "message": f"'{file.filename}' was added to the knowledge base.",
+        "description": description,
+    }

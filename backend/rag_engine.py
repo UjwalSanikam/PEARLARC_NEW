@@ -124,6 +124,24 @@ def caption_image(b64_image: str) -> str:
     result = vision_llm.invoke([caption_msg])
     return result.content
 
+def describe_image_for_kb(b64_image: str) -> str:
+    """
+    Produces a detailed, technical description of an image for the
+    knowledge base. This text is what gets embedded and searched against —
+    richer and more specific than the short guardrail caption.
+    """
+    prompt = (
+        "Describe this image in detail for a cybersecurity knowledge base. "
+        "Note any technical content visible: code, network diagrams, log output, "
+        "UI screenshots, error messages, security tool interfaces, or configuration "
+        "settings. Be specific and thorough."
+    )
+    msg = HumanMessage(content=[
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": f"data:image/png;base64,{b64_image}"},
+    ])
+    return vision_llm.invoke([msg]).content 
+
 def generate_ai_response_with_image(b64_image: str, message: str, session_id: str) -> tuple[str, list[dict]]:
     """
     Analyzes an uploaded image directly with the vision model.
