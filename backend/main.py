@@ -122,6 +122,18 @@ def get_chat_history(session_id: str, db: Session = Depends(get_db), current_use
         for msg in messages
     ]
 
+@app.delete("/api/chats/{session_id}")
+def delete_chat(session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    session = db.query(ChatSession).filter(
+        ChatSession.id == session_id,
+        ChatSession.user_id == current_user.id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+
+    db.delete(session)
+    db.commit()
+    return {"message": "Chat deleted successfully."}
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_with_ai(req: ChatRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):

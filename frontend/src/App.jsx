@@ -158,6 +158,37 @@ function App() {
   };
 
   /* ----------------------------- */
+  /* DELETE CHAT                      */
+  /* ----------------------------- */
+  const deleteChat = async (e, sessionId) => {
+    e.stopPropagation(); // don't trigger the session's own onClick (which loads it)
+
+    const confirmed = window.confirm("Delete this chat? This can't be undone.");
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/chats/${sessionId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!res.ok) {
+        console.error("Failed to delete chat:", res.status);
+        return;
+      }
+
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+
+      if (activeId === sessionId) {
+        setActiveId(null);
+        setMessages(INITIAL_MESSAGES);
+      }
+    } catch (err) {
+      console.error("Failed to delete chat:", err);
+    }
+  };
+
+  /* ----------------------------- */
   /* PDF UPLOAD                    */
   /* ----------------------------- */
 
@@ -435,15 +466,35 @@ function App() {
               )}
 
               {sessions.map((session) => (
-                <button
+                <div
                   key={session.id}
-                  className={`session-item ${activeId === session.id ? "active" : ""
-                    }`}
+                  className={`session-item ${activeId === session.id ? "active" : ""}`}
                   onClick={() => setActiveId(session.id)}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
                 >
-                  <MessageSquare size={15} />
-                  <span className="session-title">{session.title}</span>
-                </button>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                    <MessageSquare size={15} />
+                    <span className="session-title">{session.title}</span>
+                  </div>
+
+                  <button
+                    onClick={(e) => deleteChat(e, session.id)}
+                    aria-label="Delete chat"
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      color: "inherit",
+                      opacity: 0.6,
+                      padding: "4px",
+                      flexShrink: 0,
+                    }}
+                    onMouseEnter={(ev) => (ev.currentTarget.style.opacity = "1")}
+                    onMouseLeave={(ev) => (ev.currentTarget.style.opacity = "0.6")}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
               ))}
             </div>
 
