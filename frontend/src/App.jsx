@@ -54,6 +54,7 @@ function App() {
   const [selectedImage, setSelectedImage] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const inlineImageUploadRef = useRef(null);
+  const [expandedImage, setExpandedImage] = useState(null);
 
   /* ----------------------------- */
   /* FETCH SESSIONS & STATUS       */
@@ -475,6 +476,53 @@ function App() {
             </div>
           </aside>
         )}
+        {expandedImage && (
+          <div
+            onClick={() => setExpandedImage(null)}
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              width: "100vw",
+              height: "100vh",
+              background: "rgba(0, 0, 0, 0.85)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 1000,
+              cursor: "pointer",
+            }}
+          >
+            <img
+              src={expandedImage}
+              alt="Full size"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                maxWidth: "90vw",
+                maxHeight: "90vh",
+                borderRadius: "8px",
+                boxShadow: "0 4px 24px rgba(0,0,0,0.5)",
+              }}
+            />
+            <button
+              onClick={() => setExpandedImage(null)}
+              style={{
+                position: "absolute",
+                top: "24px",
+                right: "32px",
+                background: "transparent",
+                border: "none",
+                color: "white",
+                fontSize: "2rem",
+                cursor: "pointer",
+                lineHeight: 1,
+              }}
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Chat area flexes to fill remaining width next to the sidebar */}
@@ -499,7 +547,14 @@ function App() {
                   <img
                     src={msg.image}
                     alt="Uploaded"
-                    style={{ maxWidth: "260px", borderRadius: "8px", marginBottom: "8px", display: "block" }}
+                    onClick={() => setExpandedImage(msg.image)}
+                    style={{
+                      maxWidth: "260px",
+                      borderRadius: "8px",
+                      marginBottom: "8px",
+                      display: "block",
+                      cursor: "pointer",
+                    }}
                   />
                 )}
                 <div className="bubble-text">{msg.text}</div>
@@ -627,7 +682,7 @@ function App() {
             <button
               type="submit"
               className="send-btn"
-              disabled={!input.trim() || isLoading}
+              disabled={(!input.trim() && !selectedImage) || isLoading}
             >
               <Send size={18} />
             </button>
