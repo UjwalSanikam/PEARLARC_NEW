@@ -375,7 +375,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         reload_vector_db()
 
         return {
-            "message": f"'{file.filename}' passed the cybersecurity check and was added to the knowledge base.",
+            "message": f"'{file.filename}'  has been successfully uploaded. Do you have any queries related to it?",
             "domain_check": domain_result,
         }
 
