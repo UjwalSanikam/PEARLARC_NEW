@@ -57,11 +57,19 @@ from database import User
 
 @app.post("/api/auth/register", response_model=TokenResponse)
 def register(payload: UserCreate, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.email == payload.email).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered.")
+    is_email = "@" in payload.identifier
 
-    user = User(email=payload.email, hashed_password=hash_password(payload.password))
+    existing = db.query(User).filter(
+        User.email == payload.identifier if is_email else User.phone_number == payload.identifier
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="An account with this email or phone number already exists.")
+
+    user = User(
+        email=payload.identifier if is_email else None,
+        phone_number=payload.identifier if not is_email else None,
+        hashed_password=hash_password(payload.password),
+    )
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -72,9 +80,14 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
 
 @app.post("/api/auth/login", response_model=TokenResponse)
 def login(payload: UserLogin, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == payload.email).first()
+    is_email = "@" in payload.identifier
+
+    user = db.query(User).filter(
+        User.email == payload.identifier if is_email else User.phone_number == payload.identifier
+    ).first()
+
     if not user or not verify_password(payload.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
+        raise HTTPException(status_code=401, detail="Invalid credentials.")
 
     token = create_access_token(user.id)
     return TokenResponse(access_token=token)
@@ -84,7 +97,11 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
 
 @app.get("/api/auth/me")
 def get_me(current_user: User = Depends(get_current_user)):
-    return {"id": current_user.id, "email": current_user.email}
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "phone_number": current_user.phone_number,
+    }
 
 
 @app.get("/api/status")

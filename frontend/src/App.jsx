@@ -55,6 +55,7 @@ function App() {
   const [imagePreview, setImagePreview] = useState(null);
   const inlineImageUploadRef = useRef(null);
   const [expandedImage, setExpandedImage] = useState(null);
+  const [chatToDelete, setChatToDelete] = useState(null); // holds session id awaiting confirmation
 
   /* ----------------------------- */
   /* FETCH SESSIONS & STATUS       */
@@ -159,12 +160,15 @@ function App() {
 
   /* ----------------------------- */
   /* DELETE CHAT                      */
-  /* ----------------------------- */
-  const deleteChat = async (e, sessionId) => {
-    e.stopPropagation(); // don't trigger the session's own onClick (which loads it)
+  const requestDeleteChat = (e, sessionId) => {
+    e.stopPropagation();
+    setChatToDelete(sessionId);
+  };
 
-    const confirmed = window.confirm("Delete this chat? This can't be undone.");
-    if (!confirmed) return;
+  const confirmDeleteChat = async () => {
+    const sessionId = chatToDelete;
+    setChatToDelete(null);
+    if (!sessionId) return;
 
     try {
       const res = await fetch(`${API_BASE}/chats/${sessionId}`, {
@@ -478,7 +482,7 @@ function App() {
                   </div>
 
                   <button
-                    onClick={(e) => deleteChat(e, session.id)}
+                    onClick={(e) => requestDeleteChat(e, session.id)}
                     aria-label="Delete chat"
                     style={{
                       background: "transparent",
@@ -572,6 +576,74 @@ function App() {
             >
               ×
             </button>
+          </div>
+        )}
+        {chatToDelete && (
+          <div
+            onClick={() => setChatToDelete(null)}
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              width: "100vw",
+              height: "100vh",
+              background: "rgba(0, 0, 0, 0.6)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 1100,
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                background: "#1e1e1e",
+                borderRadius: "12px",
+                padding: "24px",
+                width: "320px",
+                boxShadow: "0 4px 24px rgba(0,0,0,0.5)",
+                textAlign: "center",
+              }}
+            >
+              <div style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "8px", color: "white" }}>
+                Delete this chat?
+              </div>
+              <div style={{ fontSize: "0.85rem", opacity: 0.7, marginBottom: "20px", color: "white" }}>
+                This can't be undone.
+              </div>
+
+              <div style={{ display: "flex", gap: "12px", justifyContent: "center" }}>
+                <button
+                  onClick={() => setChatToDelete(null)}
+                  style={{
+                    flex: 1,
+                    padding: "10px",
+                    borderRadius: "8px",
+                    border: "1px solid rgba(255,255,255,0.2)",
+                    background: "transparent",
+                    color: "white",
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDeleteChat}
+                  style={{
+                    flex: 1,
+                    padding: "10px",
+                    borderRadius: "8px",
+                    border: "none",
+                    background: "#dc2626",
+                    color: "white",
+                    cursor: "pointer",
+                    fontWeight: 600,
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

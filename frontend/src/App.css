@@ -820,3 +820,10 @@ body {
   align-items: center !important;
   justify-content: space-between !important;
 }
+
+.login-hint {
+  font-size: 0.8rem;
+  opacity: 0.6;
+  margin-top: -8px;
+  margin-bottom: 8px;
+}
