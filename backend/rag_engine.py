@@ -32,7 +32,11 @@ QA_PROMPT = PromptTemplate.from_template(edu_prompt)
 # responds conversationally ("can you provide more context?") instead of
 # outputting a plain rephrased question, which then hits the retriever as
 # a useless query and produces a vague answer.
+
+vector_db = None  # kept as a module-level handle so the streaming path can query it directly
+
 def _load_qa_chain():
+    global vector_db
     vector_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
     return ConversationalRetrievalChain.from_llm(
         llm=llm,
@@ -42,6 +46,7 @@ def _load_qa_chain():
     )
 
 qa_chain = _load_qa_chain()
+
 
 def reload_vector_db():
     """Call this after new PDFs are added so the chatbot can see them immediately, without restarting the server."""
@@ -102,6 +107,48 @@ def generate_ai_response(safe_message: str, session_id: str) -> tuple[str, list[
 
     session_memory.add_turn(safe_message, ai_reply)
     return ai_reply, formatted_sources
+
+import json
+
+async def generate_ai_response_stream(safe_message: str, session_id: str):
+    """
+    Streaming counterpart to generate_ai_response. Retrieves context the same
+    way, but yields the LLM's answer token by token instead of waiting for
+    the full response. The final yield is a '[[SOURCES]]<json>' marker
+    carrying the citation list, since sources aren't known until retrieval
+    completes (which happens before streaming starts, so this is really
+    just handing them back to the caller after the fact).
+    """
+    session_memory = memory_store.get(session_id)
+    history = session_memory.get_recent_history()
+
+    standalone_question = _build_standalone_question(safe_message, history)
+    print(f"[DEBUG] Standalone question sent to RAG (stream): {standalone_question}")
+
+    retrieved_docs = vector_db.similarity_search(standalone_question, k=6)
+    context = "\n\n".join(doc.page_content for doc in retrieved_docs)
+    prompt = QA_PROMPT.format(context=context, question=standalone_question)
+
+    full_reply = ""
+    async for chunk in llm.astream(prompt):
+        token = chunk.content if hasattr(chunk, "content") else str(chunk)
+        if token:
+            full_reply += token
+            yield token
+
+    formatted_sources = []
+    seen = set()
+    for doc in retrieved_docs:
+        src_name = doc.metadata.get("source", "Unknown")
+        page_num = doc.metadata.get("page", "N/A")
+        snippet = doc.page_content[:200].replace("\n", " ").strip() + "..."
+        identifier = f"{src_name}-{page_num}"
+        if identifier not in seen:
+            seen.add(identifier)
+            formatted_sources.append({"source": src_name, "page": page_num, "snippet": snippet})
+
+    session_memory.add_turn(safe_message, full_reply)
+    yield f"[[SOURCES]]{json.dumps(formatted_sources)}"
 
 from langchain_core.messages import HumanMessage
 

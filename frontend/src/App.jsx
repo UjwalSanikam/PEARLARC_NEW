@@ -55,6 +55,7 @@ function App() {
   const [imagePreview, setImagePreview] = useState(null);
   const inlineImageUploadRef = useRef(null);
   const [expandedImage, setExpandedImage] = useState(null);
+  const [isStreaming, setIsStreaming] = useState(false);
   const [chatToDelete, setChatToDelete] = useState(null); // holds session id awaiting confirmation
 
   /* ----------------------------- */
@@ -318,11 +319,15 @@ function App() {
       return;
     }
 
-    // --- existing text-only path, unchanged ---
+    // --- streaming text path ---
+    setIsLoading(false); // this path uses isStreaming instead
+    setIsStreaming(true);
+
     setMessages((prev) => [...prev, { role: "user", text }]);
+    setMessages((prev) => [...prev, { role: "ai", text: "", action: "streaming" }]);
 
     try {
-      const response = await fetch(`${API_BASE}/chat`, {
+      const response = await fetch(`${API_BASE}/chat/stream`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -331,31 +336,64 @@ function App() {
         body: JSON.stringify({ message: text, session_id: activeId }),
       });
 
-      const data = await response.json();
-
-      if (!activeId && data.session_id) {
-        setActiveId(data.session_id);
-        fetchSessions();
+      if (!response.ok || !response.body) {
+        throw new Error("Stream failed");
       }
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "ai",
-          text: data.reply || "No response generated.",
-          action: data.action,
-          pii: data.pii_redacted,
-          scores: data.domain_scores,
-          sources: data.sources || [],
-        },
-      ]);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let metaData = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        const metaIndex = buffer.indexOf("[[META]]");
+        const visibleText = metaIndex !== -1 ? buffer.slice(0, metaIndex) : buffer;
+
+        if (metaIndex !== -1) {
+          try {
+            metaData = JSON.parse(buffer.slice(metaIndex + "[[META]]".length));
+          } catch {
+            // meta JSON not fully arrived yet, will retry on next chunk
+          }
+        }
+
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = { ...updated[updated.length - 1], text: visibleText };
+          return updated;
+        });
+      }
+
+      if (metaData) {
+        if (!activeId && metaData.session_id) {
+          setActiveId(metaData.session_id);
+          fetchSessions();
+        }
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            ...updated[updated.length - 1],
+            action: metaData.action,
+            pii: metaData.pii_redacted,
+            scores: metaData.domain_scores,
+            sources: metaData.sources || [],
+          };
+          return updated;
+        });
+      }
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "ai", text: "Communication error.", action: "error" },
-      ]);
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = { role: "ai", text: "Communication error.", action: "error" };
+        return updated;
+      });
     } finally {
-      setIsLoading(false);
+      setIsStreaming(false);
     }
   };
 
@@ -799,13 +837,13 @@ function App() {
               placeholder="Ask a cybersecurity question..."
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              disabled={isLoading}
+              disabled={isLoading || isStreaming}
             />
 
             <button
               type="submit"
               className="send-btn"
-              disabled={(!input.trim() && !selectedImage) || isLoading}
+              disabled={(!input.trim() && !selectedImage) || isLoading || isStreaming}
             >
               <Send size={18} />
             </button>
