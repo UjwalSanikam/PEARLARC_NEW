@@ -21,13 +21,6 @@ services:
     volumes:
       - ollama_models:/root/.ollama
     entrypoint: [ "/bin/sh", "-c", "ollama serve & sleep 5 && ollama pull nomic-embed-text && ollama pull phi3 && ollama pull llava:7b && wait" ]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [ gpu ]
   backend:
     build:
       context: ./backend

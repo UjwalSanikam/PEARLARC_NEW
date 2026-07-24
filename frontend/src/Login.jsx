@@ -155,9 +155,9 @@ export default function Login() {
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    width: 32px;
-                    height: 32px;
-                    border-radius: 9px;
+                    width: 52px;
+                    height: 52px;
+                    border-radius: 14px;
                     background: rgba(76, 201, 240, 0.12);
                     border: 1px solid rgba(76, 201, 240, 0.3);
                     color: var(--cg-accent-strong);
@@ -166,7 +166,7 @@ export default function Login() {
                 .cg-brand-text {
                     font-family: 'Space Grotesk', sans-serif;
                     font-weight: 700;
-                    font-size: 1.05rem;
+                    font-size: 1.7rem;
                     letter-spacing: 0.01em;
                 }
 
@@ -200,6 +200,7 @@ export default function Login() {
                     justify-content: center;
                     min-height: calc(100vh - 80px);
                     padding: 24px 20px 48px;
+                    transform: translateY(-48px);
                 }
 
                 .cg-panel {
@@ -212,6 +213,12 @@ export default function Login() {
                     border-radius: var(--cg-radius-lg);
                     padding: 36px 32px 30px;
                     box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+                    animation: cg-panel-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+                }
+
+                @keyframes cg-panel-in {
+                    0% { opacity: 0; transform: translateY(18px) scale(0.96); }
+                    100% { opacity: 1; transform: translateY(0) scale(1); }
                 }
 
                 .cg-title {
@@ -220,6 +227,7 @@ export default function Login() {
                     font-size: 1.6rem;
                     color: var(--cg-ink);
                     margin: 0 0 6px;
+                    text-align: center;
                 }
 
                 .cg-subtitle {
@@ -227,6 +235,7 @@ export default function Login() {
                     color: var(--cg-ink-dim);
                     margin: 0 0 26px;
                     line-height: 1.5;
+                    text-align: center;
                 }
 
                 .cg-form {
@@ -404,6 +413,7 @@ export default function Login() {
                 @media (prefers-reduced-motion: reduce) {
                     .cg-scan { animation: none; display: none; }
                     .cg-spin { animation-duration: 1.4s; }
+                    .cg-panel { animation: none; }
                 }
 
                 @media (max-width: 420px) {
@@ -418,7 +428,7 @@ export default function Login() {
             <div className="cg-navbar">
                 <div className="cg-brand">
                     <span className="cg-brand-mark">
-                        <Shield size={17} strokeWidth={2.4} />
+                        <Shield size={28} strokeWidth={2.4} />
                     </span>
                     <span className="cg-brand-text">CyberGuard AI</span>
                 </div>
