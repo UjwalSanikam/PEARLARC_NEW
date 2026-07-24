@@ -52,7 +52,6 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const scrollRef = useRef(null);
-  const sidebarUploadRef = useRef(null);
   const inlineUploadRef = useRef(null);
   const chatImportRef = useRef(null);
 
@@ -255,48 +254,7 @@ function App() {
   /* PDF UPLOAD                    */
   /* ----------------------------- */
 
-  const handleUpload = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
 
-    const form = new FormData();
-    form.append("file", file);
-    setIsLoading(true);
-
-    try {
-      const res = await fetch(`${API_BASE}/upload`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: form,
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "ai",
-            text: data.detail || "PDF upload failed. Please try a different file.",
-            action: "error",
-          },
-        ]);
-      } else {
-        setMessages((prev) => [
-          ...prev,
-          { role: "ai", text: data.message || "PDF uploaded successfully.", action: "upload_success" },
-        ]);
-      }
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "ai", text: "Unable to connect to the upload server.", action: "error" },
-      ]);
-    } finally {
-      setIsLoading(false);
-      event.target.value = "";
-    }
-  };
   /* ----------------------------- */
   /* IMAGE SELECT (chat analysis)  */
   /* ----------------------------- */
@@ -639,6 +597,53 @@ function App() {
     reader.readAsText(file);
   };
 
+  const sidebarUploadRef = useRef(null);
+
+  const handleBatchUpload = async (event) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (files.length === 0) return;
+
+    const form = new FormData();
+    files.forEach((f) => form.append("files", f));
+
+    setIsLoading(true);
+
+    try {
+      const res = await fetch(`${API_BASE}/upload/batch`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+
+      const data = await res.json();
+
+      const lines = (data.results || []).map((r) => {
+        const icon = r.status === "success" ? "✅" : r.status === "rejected" ? "🚫" : r.status === "skipped" ? "⏭️" : "❌";
+        const detail = r.reason ? ` — ${r.reason}` : "";
+        return `${icon} ${r.filename}${detail}`;
+      });
+
+      const successCount = (data.results || []).filter((r) => r.status === "success").length;
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "ai",
+          text: `Batch upload complete: ${successCount}/${files.length} added to the knowledge base.\n\n${lines.join("\n")}`,
+          action: successCount > 0 ? "upload_success" : "error",
+        },
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        { role: "ai", text: "Unable to connect to the upload server.", action: "error" },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   /* ----------------------------- */
   /* AUTH GATE (after all hooks)   */
   /* ----------------------------- */
@@ -722,14 +727,16 @@ function App() {
                 <FileText size={16} />
                 Upload PDF
               </button>
-
               <input
                 type="file"
-                accept="application/pdf"
+                accept="application/pdf, image/png, image/jpeg, image/webp"
+                multiple
                 ref={sidebarUploadRef}
                 style={{ display: "none" }}
-                onChange={handleUpload}
+                onChange={handleBatchUpload}
               />
+
+
 
               <button
                 className="new-chat-btn"
@@ -1223,10 +1230,11 @@ function App() {
           <form className="input-bar" onSubmit={submit}>
             <input
               type="file"
-              accept="application/pdf"
+              accept="application/pdf, image/png, image/jpeg, image/webp"
+              multiple
               ref={inlineUploadRef}
               style={{ display: "none" }}
-              onChange={handleUpload}
+              onChange={handleBatchUpload}
             />
 
             <button
@@ -1234,6 +1242,7 @@ function App() {
               className="inline-plus-btn"
               onClick={() => inlineUploadRef.current.click()}
               disabled={isLoading}
+              title="Upload to knowledge base (PDF/image, multiple allowed)"
             >
               <Plus size={18} />
             </button>

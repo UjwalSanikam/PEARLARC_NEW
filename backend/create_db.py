@@ -66,20 +66,28 @@ def add_documents_to_index(new_docs: list[Document]):
     print(f"SUCCESS! Added {len(new_docs)} document(s) incrementally.")
 
 
-def add_pdf_to_index(file_path: str):
-    """Chunks a single newly-uploaded PDF and adds only its chunks to the index."""
-    print(f"Chunking new PDF: {file_path}")
+def chunk_pdf(file_path: str) -> list[Document]:
+    """Loads and chunks a single PDF, without touching the index."""
     pages = PyPDFLoader(file_path).load()
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=300)
-    chunks = text_splitter.split_documents(pages)
+    return text_splitter.split_documents(pages)
+
+
+def build_image_document(description: str, filename: str, file_path: str) -> Document:
+    """Builds a single image's Document, without touching the index."""
+    return Document(
+        page_content=description,
+        metadata={"source": filename, "type": "image", "image_path": file_path},
+    )
+
+
+def add_pdf_to_index(file_path: str):
+    """Chunks a single newly-uploaded PDF and adds only its chunks to the index."""
+    chunks = chunk_pdf(file_path)
     print(f"Created {len(chunks)} chunks from this PDF.")
     add_documents_to_index(chunks)
 
 
 def add_image_to_index(description: str, filename: str, file_path: str):
     """Adds a single newly-uploaded image's description as one document to the index."""
-    doc = Document(
-        page_content=description,
-        metadata={"source": filename, "type": "image", "image_path": file_path},
-    )
-    add_documents_to_index([doc])
+    add_documents_to_index([build_image_document(description, filename, file_path)])

@@ -42,6 +42,10 @@ from schemas import RenameSessionRequest
 from schemas import ImportChatRequest
 from schemas import RegenerateRequest
 
+from typing import List
+from create_db import chunk_pdf, build_image_document
+from create_db import build_database, add_pdf_to_index, add_image_to_index, add_documents_to_index
+
 # --- NEW: Generate Tables on Startup ---
 print("Generating database tables...")
 Base.metadata.create_all(bind=engine)
@@ -679,3 +683,96 @@ async def upload_kb_image(
         "message": f"'{file.filename}' was added to the knowledge base.",
         "description": description,
     }
+
+@app.post("/api/upload/batch")
+async def upload_batch(
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    results = []
+    docs_to_add = []
+
+    for file in files:
+        filename = file.filename
+        try:
+            contents = await file.read()
+            if len(contents) > 10 * 1024 * 1024:
+                results.append({"filename": filename, "status": "failed", "reason": "File too large (max 10MB)."})
+                continue
+
+            is_pdf = filename.lower().endswith(".pdf")
+            is_image = file.content_type in ("image/png", "image/jpeg", "image/webp")
+
+            if is_pdf:
+                os.makedirs("temp_uploads", exist_ok=True)
+                temp_path = os.path.join("temp_uploads", filename)
+                with open(temp_path, "wb") as f:
+                    f.write(contents)
+
+                try:
+                    pages = PyPDFLoader(temp_path).load()
+                except Exception as e:
+                    os.remove(temp_path)
+                    results.append({"filename": filename, "status": "failed", "reason": f"Could not read PDF: {str(e)}"})
+                    continue
+
+                sample_text = " ".join(p.page_content for p in pages[:5])
+                if not sample_text.strip():
+                    os.remove(temp_path)
+                    results.append({"filename": filename, "status": "failed", "reason": "No extractable text (may be scanned)."})
+                    continue
+
+                domain_result = classify_document_domain(sample_text)
+                if not domain_result["is_cybersecurity"]:
+                    os.remove(temp_path)
+                    results.append({"filename": filename, "status": "rejected", "reason": "Not cybersecurity-related."})
+                    continue
+
+                final_path = os.path.join("data", filename)
+                os.makedirs("data", exist_ok=True)
+                shutil.move(temp_path, final_path)
+
+                docs_to_add.extend(chunk_pdf(final_path))
+                results.append({"filename": filename, "status": "success", "type": "pdf"})
+
+            elif is_image:
+                b64_image = base64.b64encode(contents).decode()
+
+                caption = caption_image(b64_image)
+                guard_result = run_guardrails(caption)
+                if guard_result.action in (GuardrailAction.EMERGENCY, GuardrailAction.BLOCK_OOB):
+                    results.append({"filename": filename, "status": "rejected", "reason": "Not cybersecurity-related."})
+                    continue
+
+                description = describe_image_for_kb(b64_image)
+
+                os.makedirs("data/images", exist_ok=True)
+                final_path = os.path.join("data/images", filename)
+                with open(final_path, "wb") as f:
+                    f.write(contents)
+
+                kb_image = KnowledgeImage(
+                    filename=filename,
+                    file_path=final_path,
+                    description=description,
+                    uploaded_by=current_user.id,
+                )
+                db.add(kb_image)
+
+                docs_to_add.append(build_image_document(description, filename, final_path))
+                results.append({"filename": filename, "status": "success", "type": "image"})
+
+            else:
+                results.append({"filename": filename, "status": "skipped", "reason": "Unsupported file type."})
+
+        except Exception as e:
+            print(f"[ERROR] Batch upload failed for {filename}: {str(e)}")
+            results.append({"filename": filename, "status": "failed", "reason": str(e)})
+
+    if any(r["status"] == "success" for r in results):
+        db.commit()  # commit all successful KnowledgeImage rows together
+        add_documents_to_index(docs_to_add)  # one embedding pass for the whole batch
+        reload_vector_db()
+
+    return {"results": results}
