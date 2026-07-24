@@ -19,6 +19,8 @@ import {
   Edit3,
   Check,
   Copy,
+  Download,
+  Upload,
 } from "lucide-react";
 
 // Update this to your actual backend IP if needed (e.g., "http://192.168.1.73:8000/api")
@@ -51,6 +53,7 @@ function App() {
   const scrollRef = useRef(null);
   const sidebarUploadRef = useRef(null);
   const inlineUploadRef = useRef(null);
+  const chatImportRef = useRef(null);
 
   const [isOnline, setIsOnline] = useState(false);
 
@@ -473,6 +476,83 @@ function App() {
   };
 
   /* ----------------------------- */
+  /* DOWNLOAD CHAT                 */
+  /* ----------------------------- */
+
+  const downloadChat = () => {
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+      sessionTitle: sessions.find((s) => s.id === activeId)?.title || "Untitled chat",
+      messages: messages.map((msg) => ({
+        role: msg.role,
+        text: msg.text,
+        sources: msg.sources || [],
+      })),
+    };
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `cyberguard-chat-${stamp}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  /* ----------------------------- */
+  /* IMPORT CHAT                   */
+  /* ----------------------------- */
+
+  const handleImportChat = (event) => {
+    const file = event.target.files[0];
+    event.target.value = "";
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        const importedMessages = Array.isArray(parsed) ? parsed : parsed.messages;
+
+        if (!Array.isArray(importedMessages)) {
+          throw new Error("File doesn't contain a recognizable chat export.");
+        }
+
+        const cleaned = importedMessages
+          .filter((m) => m && (m.role === "user" || m.role === "ai"))
+          .map((m) => ({
+            role: m.role,
+            text: m.text || "",
+            sources: Array.isArray(m.sources) ? m.sources : [],
+            action: "history",
+          }));
+
+        // Imported chats are loaded locally for viewing/continuing, not
+        // attached to a saved session on the backend.
+        setActiveId(null);
+        setMessages(cleaned.length > 0 ? cleaned : INITIAL_MESSAGES);
+      } catch (err) {
+        console.error("Failed to import chat:", err);
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "ai",
+            text: "That file doesn't look like a valid CyberGuard AI chat export.",
+            action: "error",
+          },
+        ]);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  /* ----------------------------- */
   /* AUTH GATE (after all hooks)   */
   /* ----------------------------- */
 
@@ -573,6 +653,24 @@ function App() {
                 <Plus size={16} />
                 New Chat
               </button>
+
+              <input
+                type="file"
+                accept="application/json"
+                ref={chatImportRef}
+                style={{ display: "none" }}
+                onChange={handleImportChat}
+              />
+
+              <button
+                className="new-chat-btn"
+                onClick={() => chatImportRef.current.click()}
+                disabled={isLoading}
+                style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}
+              >
+                <Upload size={16} />
+                Import Chat
+              </button>
             </div>
 
             <div className="session-list">
@@ -632,7 +730,7 @@ function App() {
                   ) : (
                     <>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-                        <MessageSquare size={15} />
+                        <MessageSquare size={15} style={{ flexShrink: 0 }} />
                         <span className="session-title">{session.title}</span>
                       </div>
 
@@ -651,7 +749,7 @@ function App() {
                           onMouseEnter={(ev) => (ev.currentTarget.style.opacity = "1")}
                           onMouseLeave={(ev) => (ev.currentTarget.style.opacity = "0.6")}
                         >
-                          <Edit3 size={14} />
+                          <Edit3 size={14} style={{ flexShrink: 0 }} />
                         </button>
 
                         <button
@@ -668,7 +766,7 @@ function App() {
                           onMouseEnter={(ev) => (ev.currentTarget.style.opacity = "1")}
                           onMouseLeave={(ev) => (ev.currentTarget.style.opacity = "0.6")}
                         >
-                          <X size={14} />
+                          <X size={14} style={{ flexShrink: 0 }} />
                         </button>
                       </div>
                     </>
@@ -918,6 +1016,8 @@ function App() {
             <div
               style={{
                 display: "flex",
+                alignItems: "center",
+                gap: "4px",
                 justifyContent: "flex-start",
                 padding: "4px 16px 10px 48px",
               }}
@@ -950,6 +1050,36 @@ function App() {
                 }}
               >
                 {copied ? <Check size={15} /> : <Copy size={15} />}
+              </button>
+
+              <button
+                type="button"
+                onClick={downloadChat}
+                aria-label="Download this chat"
+                title="Download chat"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: "28px",
+                  height: "28px",
+                  background: "transparent",
+                  border: "none",
+                  borderRadius: "6px",
+                  color: "rgba(255, 255, 255, 0.45)",
+                  cursor: "pointer",
+                  transition: "color 0.15s ease, background 0.15s ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "rgba(255, 255, 255, 0.08)";
+                  e.currentTarget.style.color = "white";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.color = "rgba(255, 255, 255, 0.45)";
+                }}
+              >
+                <Download size={15} />
               </button>
             </div>
           )}
