@@ -632,7 +632,7 @@ function App() {
                   ) : (
                     <>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-                        <MessageSquare size={15} />
+                        <MessageSquare size={15} style={{ flexShrink: 0 }} />
                         <span className="session-title">{session.title}</span>
                       </div>
 
@@ -651,7 +651,7 @@ function App() {
                           onMouseEnter={(ev) => (ev.currentTarget.style.opacity = "1")}
                           onMouseLeave={(ev) => (ev.currentTarget.style.opacity = "0.6")}
                         >
-                          <Edit3 size={14} />
+                          <Edit3 size={14} style={{ flexShrink: 0 }} />
                         </button>
 
                         <button
@@ -668,7 +668,7 @@ function App() {
                           onMouseEnter={(ev) => (ev.currentTarget.style.opacity = "1")}
                           onMouseLeave={(ev) => (ev.currentTarget.style.opacity = "0.6")}
                         >
-                          <X size={14} />
+                          <X size={14} style={{ flexShrink: 0 }} />
                         </button>
                       </div>
                     </>
