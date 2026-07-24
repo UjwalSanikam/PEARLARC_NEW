@@ -5,6 +5,8 @@ from langchain_classic.chains import ConversationalRetrievalChain
 from langchain_core.prompts import PromptTemplate
 from memory import memory_store
 
+import httpx    
+
 print("Initializing Local AI Models and Vector Database...")
 
 import os
@@ -112,12 +114,10 @@ import json
 
 async def generate_ai_response_stream(safe_message: str, session_id: str):
     """
-    Streaming counterpart to generate_ai_response. Retrieves context the same
-    way, but yields the LLM's answer token by token instead of waiting for
-    the full response. The final yield is a '[[SOURCES]]<json>' marker
-    carrying the citation list, since sources aren't known until retrieval
-    completes (which happens before streaming starts, so this is really
-    just handing them back to the caller after the fact).
+    Streaming counterpart to generate_ai_response. Talks to Ollama's HTTP
+    API directly (bypassing LangChain's astream, which doesn't reliably
+    stream token-by-token with this model/package combination) to
+    guarantee real incremental output.
     """
     session_memory = memory_store.get(session_id)
     history = session_memory.get_recent_history()
@@ -130,11 +130,24 @@ async def generate_ai_response_stream(safe_message: str, session_id: str):
     prompt = QA_PROMPT.format(context=context, question=standalone_question)
 
     full_reply = ""
-    async for chunk in llm.astream(prompt):
-        token = chunk.content if hasattr(chunk, "content") else str(chunk)
-        if token:
-            full_reply += token
-            yield token
+    payload = {
+        "model": "phi3",
+        "prompt": prompt,
+        "stream": True,
+    }
+
+    async with httpx.AsyncClient(timeout=None) as client:
+        async with client.stream("POST", f"{OLLAMA_BASE_URL}/api/generate", json=payload) as response:
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                data = json.loads(line)
+                token = data.get("response", "")
+                if token:
+                    full_reply += token
+                    yield token
+                if data.get("done"):
+                    break
 
     formatted_sources = []
     seen = set()
