@@ -16,6 +16,8 @@ import {
   LogOut,
   ImageIcon,
   X,
+  Copy,
+  Check,
 } from "lucide-react";
 
 // Update this to your actual backend IP if needed (e.g., "http://192.168.1.73:8000/api")
@@ -57,6 +59,7 @@ function App() {
   const [expandedImage, setExpandedImage] = useState(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [chatToDelete, setChatToDelete] = useState(null); // holds session id awaiting confirmation
+  const [copied, setCopied] = useState(false);
 
   /* ----------------------------- */
   /* FETCH SESSIONS & STATUS       */
@@ -394,6 +397,27 @@ function App() {
       });
     } finally {
       setIsStreaming(false);
+    }
+  };
+
+  /* ----------------------------- */
+  /* COPY CHAT                     */
+  /* ----------------------------- */
+
+  const copyChatToClipboard = async () => {
+    const transcript = messages
+      .map((msg) => {
+        const speaker = msg.role === "ai" ? "CyberGuard AI" : "You";
+        return `${speaker}: ${msg.text || ""}`;
+      })
+      .join("\n\n");
+
+    try {
+      await navigator.clipboard.writeText(transcript);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy chat:", err);
     }
   };
 
@@ -774,6 +798,46 @@ function App() {
                   Thinking...
                 </div>
               </div>
+            </div>
+          )}
+
+          {!isLoading && !isStreaming && messages.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-start",
+                padding: "4px 16px 10px 48px",
+              }}
+            >
+              <button
+                type="button"
+                onClick={copyChatToClipboard}
+                aria-label="Copy entire chat to clipboard"
+                title="Copy chat"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: "28px",
+                  height: "28px",
+                  background: "transparent",
+                  border: "none",
+                  borderRadius: "6px",
+                  color: copied ? "#4CE0B3" : "rgba(255, 255, 255, 0.45)",
+                  cursor: "pointer",
+                  transition: "color 0.15s ease, background 0.15s ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "rgba(255, 255, 255, 0.08)";
+                  if (!copied) e.currentTarget.style.color = "white";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                  if (!copied) e.currentTarget.style.color = "rgba(255, 255, 255, 0.45)";
+                }}
+              >
+                {copied ? <Check size={15} /> : <Copy size={15} />}
+              </button>
             </div>
           )}
         </div>
