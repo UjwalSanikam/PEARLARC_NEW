@@ -12,3 +12,6 @@ class ChatResponse(BaseModel):
     domain_scores: dict = {}
     sources: list[dict] = []  # <-- HYBRID: Accepts objects containing both metadata and snippets
     session_id: Optional[str] = None # Needed for database syncing
+
+class RenameSessionRequest(BaseModel):
+    title: str

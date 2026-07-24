@@ -37,6 +37,8 @@ from database import SessionLocal
 from rag_engine import generate_ai_response_stream
 import json
 
+from schemas import RenameSessionRequest
+
 # --- NEW: Generate Tables on Startup ---
 print("Generating database tables...")
 Base.metadata.create_all(bind=engine)
@@ -156,6 +158,30 @@ def delete_chat(session_id: str, db: Session = Depends(get_db), current_user: Us
     db.delete(session)
     db.commit()
     return {"message": "Chat deleted successfully."}
+
+@app.patch("/api/chats/{session_id}")
+def rename_chat(
+    session_id: str,
+    payload: RenameSessionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    new_title = payload.title.strip()
+    if not new_title:
+        raise HTTPException(status_code=400, detail="Title cannot be empty.")
+    if len(new_title) > 100:
+        raise HTTPException(status_code=400, detail="Title is too long (max 100 characters).")
+
+    session = db.query(ChatSession).filter(
+        ChatSession.id == session_id,
+        ChatSession.user_id == current_user.id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+
+    session.title = new_title
+    db.commit()
+    return {"id": session.id, "title": session.title}
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_with_ai(req: ChatRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):

@@ -16,8 +16,9 @@ import {
   LogOut,
   ImageIcon,
   X,
-  Copy,
+  Edit3,
   Check,
+  Copy,
 } from "lucide-react";
 
 // Update this to your actual backend IP if needed (e.g., "http://192.168.1.73:8000/api")
@@ -60,6 +61,8 @@ function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [chatToDelete, setChatToDelete] = useState(null); // holds session id awaiting confirmation
   const [copied, setCopied] = useState(false);
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
 
   /* ----------------------------- */
   /* FETCH SESSIONS & STATUS       */
@@ -167,6 +170,54 @@ function App() {
   const requestDeleteChat = (e, sessionId) => {
     e.stopPropagation();
     setChatToDelete(sessionId);
+  };
+
+  const startRenaming = (e, session) => {
+    e.stopPropagation();
+    setRenamingId(session.id);
+    setRenameValue(session.title);
+  };
+
+  const cancelRenaming = (e) => {
+    e?.stopPropagation();
+    setRenamingId(null);
+    setRenameValue("");
+  };
+
+  const confirmRenaming = async (e, sessionId) => {
+    e?.stopPropagation();
+    const trimmed = renameValue.trim();
+
+    if (!trimmed) {
+      cancelRenaming();
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/chats/${sessionId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ title: trimmed }),
+      });
+
+      if (!res.ok) {
+        console.error("Failed to rename chat:", res.status);
+        cancelRenaming();
+        return;
+      }
+
+      const data = await res.json();
+      setSessions((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, title: data.title } : s))
+      );
+    } catch (err) {
+      console.error("Failed to rename chat:", err);
+    } finally {
+      cancelRenaming();
+    }
   };
 
   const confirmDeleteChat = async () => {
@@ -535,31 +586,93 @@ function App() {
                 <div
                   key={session.id}
                   className={`session-item ${activeId === session.id ? "active" : ""}`}
-                  onClick={() => setActiveId(session.id)}
+                  onClick={() => renamingId !== session.id && setActiveId(session.id)}
                   style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-                    <MessageSquare size={15} />
-                    <span className="session-title">{session.title}</span>
-                  </div>
+                  {renamingId === session.id ? (
+                    <div
+                      style={{ display: "flex", alignItems: "center", gap: "6px", flex: 1, minWidth: 0 }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="text"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") confirmRenaming(e, session.id);
+                          if (e.key === "Escape") cancelRenaming(e);
+                        }}
+                        autoFocus
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          background: "rgba(255,255,255,0.08)",
+                          border: "1px solid rgba(255,255,255,0.2)",
+                          borderRadius: "6px",
+                          padding: "4px 8px",
+                          color: "inherit",
+                          fontSize: "0.85rem",
+                        }}
+                      />
+                      <button
+                        onClick={(e) => confirmRenaming(e, session.id)}
+                        aria-label="Save name"
+                        style={{ background: "transparent", border: "none", cursor: "pointer", color: "inherit", padding: "4px", flexShrink: 0 }}
+                      >
+                        <Check size={14} />
+                      </button>
+                      <button
+                        onClick={cancelRenaming}
+                        aria-label="Cancel rename"
+                        style={{ background: "transparent", border: "none", cursor: "pointer", color: "inherit", opacity: 0.7, padding: "4px", flexShrink: 0 }}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                        <MessageSquare size={15} />
+                        <span className="session-title">{session.title}</span>
+                      </div>
 
-                  <button
-                    onClick={(e) => requestDeleteChat(e, session.id)}
-                    aria-label="Delete chat"
-                    style={{
-                      background: "transparent",
-                      border: "none",
-                      cursor: "pointer",
-                      color: "inherit",
-                      opacity: 0.6,
-                      padding: "4px",
-                      flexShrink: 0,
-                    }}
-                    onMouseEnter={(ev) => (ev.currentTarget.style.opacity = "1")}
-                    onMouseLeave={(ev) => (ev.currentTarget.style.opacity = "0.6")}
-                  >
-                    <X size={14} />
-                  </button>
+                      <div style={{ display: "flex", alignItems: "center", gap: "2px", flexShrink: 0 }}>
+                        <button
+                          onClick={(e) => startRenaming(e, session)}
+                          aria-label="Rename chat"
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            cursor: "pointer",
+                            color: "inherit",
+                            opacity: 0.6,
+                            padding: "4px",
+                          }}
+                          onMouseEnter={(ev) => (ev.currentTarget.style.opacity = "1")}
+                          onMouseLeave={(ev) => (ev.currentTarget.style.opacity = "0.6")}
+                        >
+                          <Edit3 size={14} />
+                        </button>
+
+                        <button
+                          onClick={(e) => requestDeleteChat(e, session.id)}
+                          aria-label="Delete chat"
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            cursor: "pointer",
+                            color: "inherit",
+                            opacity: 0.6,
+                            padding: "4px",
+                          }}
+                          onMouseEnter={(ev) => (ev.currentTarget.style.opacity = "1")}
+                          onMouseLeave={(ev) => (ev.currentTarget.style.opacity = "0.6")}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               ))}
             </div>
