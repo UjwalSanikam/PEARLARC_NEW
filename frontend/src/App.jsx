@@ -21,6 +21,7 @@ import {
   Copy,
   Download,
   Upload,
+  RefreshCw,
 } from "lucide-react";
 
 // Update this to your actual backend IP if needed (e.g., "http://192.168.1.73:8000/api")
@@ -475,6 +476,74 @@ function App() {
     }
   };
 
+  const regenerateResponse = async () => {
+    if (!activeId || isLoading || isStreaming) return;
+
+    const lastAiIndex = [...messages].map((m, i) => ({ m, i })).reverse().find((x) => x.m.role === "ai")?.i;
+    if (lastAiIndex === undefined) return;
+
+    setIsStreaming(true);
+    setMessages((prev) => {
+      const updated = [...prev];
+      updated[lastAiIndex] = { role: "ai", text: "", action: "streaming" };
+      return updated;
+    });
+
+    try {
+      const response = await fetch(`${API_BASE}/chat/regenerate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ session_id: activeId }),
+      });
+
+      if (!response.ok || !response.body) throw new Error("Regenerate failed");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let metaData = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const metaIndex = buffer.indexOf("[[META]]");
+        const visibleText = metaIndex !== -1 ? buffer.slice(0, metaIndex) : buffer;
+
+        if (metaIndex !== -1) {
+          try {
+            metaData = JSON.parse(buffer.slice(metaIndex + "[[META]]".length));
+          } catch {
+            // meta not fully arrived yet
+          }
+        }
+
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[lastAiIndex] = { ...updated[lastAiIndex], text: visibleText };
+          return updated;
+        });
+      }
+
+      if (metaData) {
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[lastAiIndex] = { ...updated[lastAiIndex], sources: metaData.sources || [] };
+          return updated;
+        });
+      }
+    } catch {
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[lastAiIndex] = { role: "ai", text: "Communication error.", action: "error" };
+        return updated;
+      });
+    } finally {
+      setIsStreaming(false);
+    }
+  };
+
   /* ----------------------------- */
   /* DOWNLOAD CHAT                 */
   /* ----------------------------- */
@@ -515,7 +584,7 @@ function App() {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
         const parsed = JSON.parse(reader.result);
         const importedMessages = Array.isArray(parsed) ? parsed : parsed.messages;
@@ -533,10 +602,28 @@ function App() {
             action: "history",
           }));
 
-        // Imported chats are loaded locally for viewing/continuing, not
-        // attached to a saved session on the backend.
-        setActiveId(null);
-        setMessages(cleaned.length > 0 ? cleaned : INITIAL_MESSAGES);
+        if (cleaned.length === 0) {
+          setMessages(INITIAL_MESSAGES);
+          return;
+        }
+
+        const title = parsed.sessionTitle || "Imported chat";
+        const res = await fetch(`${API_BASE}/chats/import`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ title, messages: cleaned }),
+        });
+
+        if (!res.ok) {
+          throw new Error("Failed to save imported chat.");
+        }
+
+        const data = await res.json();
+        setActiveId(data.session_id);
+        fetchSessions();
       } catch (err) {
         console.error("Failed to import chat:", err);
         setMessages((prev) => [
@@ -994,6 +1081,35 @@ function App() {
                     </div>
                   </details>
                 )}
+
+                {msg.role === "ai" &&
+                  index === messages.length - 1 &&
+                  activeId &&
+                  !isLoading &&
+                  !isStreaming && (
+                    <button
+                      type="button"
+                      onClick={regenerateResponse}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        marginTop: "8px",
+                        background: "transparent",
+                        border: "1px solid rgba(255,255,255,0.15)",
+                        borderRadius: "8px",
+                        padding: "6px 10px",
+                        color: "rgba(255,255,255,0.6)",
+                        fontSize: "0.78rem",
+                        cursor: "pointer",
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.color = "white")}
+                      onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(255,255,255,0.6)")}
+                    >
+                      <RefreshCw size={13} />
+                      Regenerate
+                    </button>
+                  )}
               </div>
             </div>
           ))}

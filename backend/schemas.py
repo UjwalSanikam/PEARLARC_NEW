@@ -15,3 +15,15 @@ class ChatResponse(BaseModel):
 
 class RenameSessionRequest(BaseModel):
     title: str
+
+class ImportedMessage(BaseModel):
+    role: str
+    text: str
+    sources: list[dict] = []
+
+class ImportChatRequest(BaseModel):
+    title: str
+    messages: list[ImportedMessage]
+
+class RegenerateRequest(BaseModel):
+    session_id: str

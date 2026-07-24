@@ -39,6 +39,9 @@ import json
 
 from schemas import RenameSessionRequest
 
+from schemas import ImportChatRequest
+from schemas import RegenerateRequest
+
 # --- NEW: Generate Tables on Startup ---
 print("Generating database tables...")
 Base.metadata.create_all(bind=engine)
@@ -182,6 +185,31 @@ def rename_chat(
     session.title = new_title
     db.commit()
     return {"id": session.id, "title": session.title}
+
+@app.post("/api/chats/import")
+def import_chat(
+    payload: ImportChatRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not payload.messages:
+        raise HTTPException(status_code=400, detail="No messages to import.")
+
+    new_session = ChatSession(
+        title=(payload.title or "Imported chat")[:100],
+        user_id=current_user.id,
+    )
+    db.add(new_session)
+    db.commit()
+    db.refresh(new_session)
+
+    for m in payload.messages:
+        if m.role not in ("user", "ai"):
+            continue
+        db.add(ChatMessage(session_id=new_session.id, role=m.role, content=m.text))
+    db.commit()
+
+    return {"session_id": new_session.id, "title": new_session.title}
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_with_ai(req: ChatRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -349,6 +377,68 @@ async def chat_stream(req: ChatRequest, db: Session = Depends(get_db), current_u
             "domain_scores": guard_result.classifier_score,
             "sources": sources,
         }
+        yield f"\n[[META]]{json.dumps(meta)}"
+
+    return StreamingResponse(stream_and_save(), media_type="text/plain")
+
+@app.post("/api/chat/regenerate")
+async def regenerate_response(
+    payload: RegenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    session = db.query(ChatSession).filter(
+        ChatSession.id == payload.session_id,
+        ChatSession.user_id == current_user.id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+
+    last_user_msg = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.session_id == payload.session_id, ChatMessage.role == "user")
+        .order_by(ChatMessage.created_at.desc())
+        .first()
+    )
+    if not last_user_msg:
+        raise HTTPException(status_code=400, detail="No previous question to regenerate a response for.")
+
+    last_ai_msg = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.session_id == payload.session_id, ChatMessage.role == "ai")
+        .order_by(ChatMessage.created_at.desc())
+        .first()
+    )
+    if last_ai_msg:
+        db.delete(last_ai_msg)
+        db.commit()
+
+    def save_ai_message(content: str):
+        local_db = SessionLocal()
+        try:
+            local_db.add(ChatMessage(session_id=payload.session_id, role="ai", content=content))
+            local_db.commit()
+        finally:
+            local_db.close()
+
+    async def stream_and_save():
+        full_reply = ""
+        sources = []
+        try:
+            async for chunk in generate_ai_response_stream(last_user_msg.content, payload.session_id):
+                if chunk.startswith("[[SOURCES]]"):
+                    sources = json.loads(chunk[len("[[SOURCES]]"):])
+                else:
+                    full_reply += chunk
+                    yield chunk
+        except Exception as e:
+            print(f"[DEBUG] Regenerate streaming crash: {str(e)}")
+            error_text = f"Error generating response: {str(e)}"
+            full_reply = error_text
+            yield error_text
+
+        save_ai_message(full_reply)
+        meta = {"session_id": payload.session_id, "sources": sources}
         yield f"\n[[META]]{json.dumps(meta)}"
 
     return StreamingResponse(stream_and_save(), media_type="text/plain")
